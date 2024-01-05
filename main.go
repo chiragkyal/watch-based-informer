@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"reflect"
@@ -175,6 +176,17 @@ func main() {
 	if err != nil {
 		klog.Fatal(err)
 	}
+
+	// JUST for testing
+	pods, err := clientset.CoreV1().Pods("openshift-kube-apiserver").List(context.Background(), meta_v1.ListOptions{})
+	if err != nil {
+		klog.Fatal(err)
+	}
+	klog.Info("Pods in openshift-kube-apiserver namespace")
+	for _, pod := range pods.Items {
+		klog.Info(pod.Name)
+	}
+	// JUST for testing ends
 
 	// create the pod watcher
 	podListWatcher := cache.NewListWatchFromClient(routev1client.NewForConfigOrDie(config).RouteV1().RESTClient(), "routes", "sandbox", fields.Everything())
