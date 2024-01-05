@@ -196,9 +196,10 @@ func main() {
 
 	getSecretNames := func(route *routev1.Route) sets.String {
 		result := sets.NewString()
+		secretName := route.Spec.TLS.ExternalCertificate.Name
+		result.Insert(secretName)
 
-		result.Insert(route.Spec.TLS.ExternalCertificate.Name)
-		klog.Info("")
+		klog.Info("referenced secret name :", secretName)
 		// Add route.spec.tls.certificateRef
 		return result
 	}

@@ -70,6 +70,7 @@ func (s *sm) AddEventHandler(namespace, name string, handler cache.ResourceEvent
 	m, exists := s.monitors[key]
 
 	// TODO refactor this later
+	klog.Info("name ", name)
 	secretName := strings.Split(name, "_")[1]
 	if !exists {
 		// fieldSelector := fields.Set{"metadata.name": secretName}.AsSelector().String()
