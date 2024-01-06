@@ -37,6 +37,7 @@ type SecretMonitor interface {
 
 type secretEventHandlerRegistration struct {
 	cache.ResourceEventHandlerRegistration
+	// objectKey will populate during AddEventHandler, and will be used during RemoveEventHandler
 	objectKey ObjectKey
 }
 
@@ -50,7 +51,9 @@ type sm struct {
 
 	kubeClient kubernetes.Interface
 
-	lock     sync.RWMutex
+	lock sync.RWMutex
+	// monitors is map of singleItemMonitor. Each singleItemMonitor monitors/watches
+	// a secret through individual informer.
 	monitors map[ObjectKey]*singleItemMonitor
 }
 
@@ -61,17 +64,23 @@ func NewSecretMonitor(kubeClient *kubernetes.Clientset) SecretMonitor {
 	}
 }
 
+// create/update secret watch
+// TODO: Think what is the best place to create ObjectKey{},
 func (s *sm) AddEventHandler(namespace, name string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	// name is a combination or routename_secretname
+	// name is a combination of "routename_secretname"
+	// Inside a namespace multiple route can refer a common secret.
+	// Hence route1_secret and route2_secret should denote separate key,
+	// so separate monitors inside a namespace.
 	key := ObjectKey{Namespace: namespace, Name: name}
+	klog.Info("ObjectKey %v ", key)
+
+	// Check if monitor / watch already exists
 	m, exists := s.monitors[key]
 
 	// TODO refactor this later
-	klog.Info("name ", name)
-	secretName := strings.Split(name, "_")[1]
 	if !exists {
 		// fieldSelector := fields.Set{"metadata.name": secretName}.AsSelector().String()
 		// listFunc := func(options metav1.ListOptions) (runtime.Object, error) {
@@ -92,6 +101,11 @@ func (s *sm) AddEventHandler(namespace, name string, handler cache.ResourceEvent
 		// 	&v1.Secret{},
 		// 	0, handler)
 
+		// extract secretName and create a monitor for only that secret
+		// TODO: put inside if statement, to handle index out of bound
+		// TODO: can use GetItemKey()
+		secretName := strings.Split(name, "_")[1]
+
 		sharedInformer := cache.NewSharedInformer(
 			cache.NewListWatchFromClient(
 				s.kubeClient.CoreV1().RESTClient(),
@@ -106,6 +120,7 @@ func (s *sm) AddEventHandler(namespace, name string, handler cache.ResourceEvent
 		m = newSingleItemMonitor(key, sharedInformer)
 		go m.StartInformer()
 
+		// add item key to monitors map // add watch to the list
 		s.monitors[key] = m
 
 		klog.Info("secret informer started", " item key ", key)
@@ -113,25 +128,28 @@ func (s *sm) AddEventHandler(namespace, name string, handler cache.ResourceEvent
 
 	klog.Info("secret handler added", " item key ", key)
 
-	return m.AddEventHandler(handler)
+	return m.AddEventHandler(handler) // also populate key inside handlerRegistartion
 }
 
-func (s *sm) RemoveEventHandler(handle SecretEventHandlerRegistration) error {
+// Remove secret watch
+func (s *sm) RemoveEventHandler(handlerRegistration SecretEventHandlerRegistration) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	key := handle.GetKey()
+	key := handlerRegistration.GetKey()
+	// check if watch already exists for key
 	m, ok := s.monitors[key]
 	if !ok {
 		// already removed
 		return nil
 	}
 
-	if err := m.RemoveEventHandler(handle); err != nil {
+	if err := m.RemoveEventHandler(handlerRegistration); err != nil {
 		return err
 	}
 	klog.Info("secret handler removed", " item key", key)
 
+	// stop the watch/informer if there is no handler
 	if m.numHandlers.Load() <= 0 {
 		m.Stop()
 		delete(s.monitors, key)
@@ -141,18 +159,21 @@ func (s *sm) RemoveEventHandler(handle SecretEventHandlerRegistration) error {
 	return nil
 }
 
-func (s *sm) GetSecret(handle SecretEventHandlerRegistration) (*v1.Secret, error) {
+// Get the secret object from informer's cache
+func (s *sm) GetSecret(handlerRegistration SecretEventHandlerRegistration) (*v1.Secret, error) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 
-	key := handle.GetKey()
+	key := handlerRegistration.GetKey()
 
+	// check if secret watch exists
 	m, exists := s.monitors[key]
 
 	if !exists {
 		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, m.GetItemKey())
 	}
 
+	// should take key as argument
 	uncast, exists, err := m.GetItem()
 	if !exists {
 		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, m.GetItemKey())

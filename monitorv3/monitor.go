@@ -12,7 +12,8 @@ import (
 
 type ObjectKey struct {
 	Namespace string
-	Name      string
+	// Name is usually a combination of routeName_secretName
+	Name string
 }
 
 type singleItemMonitor struct {
@@ -28,6 +29,13 @@ type singleItemMonitor struct {
 	lock    sync.Mutex
 	stopped bool
 	stopCh  chan struct{}
+}
+
+func NewObjectKey(namespace, name string) ObjectKey {
+	return ObjectKey{
+		Namespace: namespace,
+		Name:      name,
+	}
 }
 
 func newSingleItemMonitor(key ObjectKey, informer cache.SharedInformer) *singleItemMonitor {
@@ -97,6 +105,7 @@ func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistra
 	return nil
 }
 
+// TODO: should we move this inside secret_monitor.go ?
 func (i *singleItemMonitor) GetItemKey() string {
 	if keys := strings.Split(i.key.Name, "_"); len(keys) == 1 {
 		return keys[1]
@@ -106,6 +115,8 @@ func (i *singleItemMonitor) GetItemKey() string {
 }
 
 func (i *singleItemMonitor) GetItem() (item interface{}, exists bool, err error) {
+	// itemKey will hold secretName
 	itemKey := i.GetItemKey()
+	// TODO need to cross check It is trying to get objects with key "<namespace>/<secretName>"
 	return i.informer.GetStore().Get(fmt.Sprintf("%s/%s", i.key.Namespace, itemKey))
 }

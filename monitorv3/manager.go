@@ -8,7 +8,6 @@ import (
 	routev1 "github.com/openshift/api/route/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -18,8 +17,9 @@ import (
 )
 
 type Manager struct {
-	monitor            SecretMonitor
-	registeredHandlers map[string]SecretEventHandlerRegistration
+	monitor SecretMonitor
+	// map of handlerRegistrations
+	registeredHandlers map[ObjectKey]SecretEventHandlerRegistration
 
 	lock sync.RWMutex
 
@@ -34,7 +34,7 @@ func NewManager(kubeClient *kubernetes.Clientset, queue workqueue.RateLimitingIn
 		monitor:            NewSecretMonitor(kubeClient),
 		lock:               sync.RWMutex{},
 		resourceChanges:    queue,
-		registeredHandlers: make(map[string]SecretEventHandlerRegistration),
+		registeredHandlers: make(map[ObjectKey]SecretEventHandlerRegistration),
 
 		// default secret handler
 		secretHandler: cache.ResourceEventHandlerFuncs{
@@ -50,22 +50,33 @@ func (m *Manager) WithSecretHandler(handler cache.ResourceEventHandlerFuncs) *Ma
 	return m
 }
 
-func (m *Manager) GetSecret(parent *routev1.Route, namespace, name string) (*v1.Secret, error) {
+// Get secret object from informer's cache.
+// It will first check HasSynced()
+func (m *Manager) GetSecret(parent *routev1.Route) (*v1.Secret, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	key := fmt.Sprintf("%s/%s", parent.Namespace, parent.Name)
-	handle, exists := m.registeredHandlers[key]
+	// TODO refactor later, get referenced secretName from route
+	// names := getReferencedObjects(parent)
+	// secretName <-- names[0]
+
+	// TODO hard coded to test since externalCertificate is TP
+	secretName := "dummy-secret"
+
+	key := generateKey(parent.Namespace, parent.Name, secretName)
+	handlerRegistration, exists := m.registeredHandlers[key]
 
 	if !exists {
-		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
+		//return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, key.Name)
+		return nil, apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key.Name))
 	}
 
-	if err := wait.PollImmediate(10*time.Millisecond, time.Second, func() (done bool, err error) { return handle.HasSynced(), nil }); err != nil {
+	// check if informer store synced or not, to load secret
+	if err := wait.PollImmediate(10*time.Millisecond, time.Second, func() (done bool, err error) { return handlerRegistration.HasSynced(), nil }); err != nil {
 		return nil, apierrors.NewInternalError(err)
 	}
 
-	obj, err := m.monitor.GetSecret(handle)
+	obj, err := m.monitor.GetSecret(handlerRegistration)
 	if err != nil {
 		return nil, err
 	}
@@ -74,20 +85,23 @@ func (m *Manager) GetSecret(parent *routev1.Route, namespace, name string) (*v1.
 }
 
 func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func(*routev1.Route) sets.String) error {
-	// TODO refactor later
-	// names := getReferencedObjects(parent)
-
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
+	// TODO refactor later, get referenced secretName from route
+	// names := getReferencedObjects(parent)
+	// secretName <-- names[0]
+
 	// TODO hard coded to test since externalCertificate is TP
-	handle, err := m.monitor.AddEventHandler(parent.Namespace, fmt.Sprintf("%s_%s", parent.Name, "dummy-secret"), m.secretHandler)
+	secretName := "dummy-secret"
+	key := generateKey(parent.Namespace, parent.Name, secretName)
+
+	handlerRegistration, err := m.monitor.AddEventHandler(parent.Namespace, key.Name, m.secretHandler)
 	if err != nil {
 		return apierrors.NewInternalError(err)
 	}
 
-	key := fmt.Sprintf("%s/%s", parent.Namespace, parent.Name)
-	m.registeredHandlers[key] = handle
+	m.registeredHandlers[key] = handlerRegistration
 
 	klog.Info("secret manager registered route", " route", key)
 
@@ -99,20 +113,38 @@ func (m *Manager) UnregisterRoute(parent *routev1.Route, getReferencedObjects fu
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	key := fmt.Sprintf("%s/%s", parent.Namespace, parent.Name)
-	handle, ok := m.registeredHandlers[key]
-	if !ok {
-		return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
+	// TODO refactor later, get referenced secretName from route
+	// names := getReferencedObjects(parent)
+	// secretName <-- names[0]
+
+	// TODO hard coded to test since externalCertificate is TP
+	secretName := "dummy-secret"
+	key := generateKey(parent.Namespace, parent.Name, secretName)
+
+	// grab registered handler
+	handlerRegistration, exists := m.registeredHandlers[key]
+	if !exists {
+		//return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
+		return apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key.Name))
 	}
 
-	err := m.monitor.RemoveEventHandler(handle)
+	err := m.monitor.RemoveEventHandler(handlerRegistration)
 	if err != nil {
-		return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
+		// return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
+		return apierrors.NewInternalError(err)
 	}
 
+	// delete registered handler from the map
 	delete(m.registeredHandlers, key)
 
 	klog.Info("secret manager unregistered route", " route", key)
 
 	return nil
+}
+
+func generateKey(namespace, routeName, secretName string) ObjectKey {
+	return NewObjectKey(
+		namespace,
+		fmt.Sprintf("%s_%s", routeName, secretName),
+	)
 }

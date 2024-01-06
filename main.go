@@ -49,7 +49,7 @@ type watchObjectFunc func(string, meta_v1.ListOptions) (watch.Interface, error)
 var namespace = "sandbox"
 
 // NewController creates a new Controller.
-func NewController(queue workqueue.RateLimitingInterface, indexer cache.Indexer, informer cache.Controller, clientset *kubernetes.Clientset, handlerFuncs cache.ResourceEventHandlerFuncs) *Controller {
+func NewController(queue workqueue.RateLimitingInterface, indexer cache.Indexer, informer cache.Controller, clientset *kubernetes.Clientset /*handlerFuncs cache.ResourceEventHandlerFuncs*/) *Controller {
 
 	return &Controller{
 		informer: informer,
@@ -70,7 +70,7 @@ func (c *Controller) processNextItem() bool {
 	defer c.queue.Done(key)
 
 	if key, ok := key.(string); ok {
-		klog.Info("skipping processing pod with name ", " key ", key)
+		klog.Info("skipping processing route with name ", " key ", key)
 		return true
 	}
 
@@ -93,11 +93,11 @@ func (c *Controller) syncToStdout(key string) error {
 
 	if !exists {
 		// Below we will warm up our cache with a Pod, so that we will see a delete for one pod
-		fmt.Printf("Pod %s does not exist anymore\n", key)
+		fmt.Printf("Route %s does not exist anymore\n", key)
 	} else {
 		// Note that you also have to check the uid if you have a local controlled resource, which
 		// is dependent on the actual instance, to detect that a Pod was recreated with the same name
-		fmt.Printf("Sync/Add/Update for Pod %s\n", obj.(*v1.Pod).GetName())
+		fmt.Printf("Sync/Add/Update for Route %s\n", obj.(*routev1.Route).GetName())
 	}
 	return nil
 }
@@ -134,7 +134,7 @@ func (c *Controller) Run(workers int, stopCh chan struct{}) {
 
 	// Let the workers stop when we are done
 	defer c.queue.ShutDown()
-	klog.Info("Starting Pod controller")
+	klog.Info("Starting Route controller")
 
 	go c.informer.Run(stopCh)
 
@@ -188,8 +188,8 @@ func main() {
 	}
 	// JUST for testing ends
 
-	// create the pod watcher
-	podListWatcher := cache.NewListWatchFromClient(routev1client.NewForConfigOrDie(config).RouteV1().RESTClient(), "routes", "sandbox", fields.Everything())
+	// create the route watcher
+	routeListWatcher := cache.NewListWatchFromClient(routev1client.NewForConfigOrDie(config).RouteV1().RESTClient(), "routes", namespace, fields.Everything())
 
 	// create the workqueue
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
@@ -200,7 +200,6 @@ func main() {
 		result.Insert(secretName)
 
 		klog.Info("referenced secret name :", secretName)
-		// Add route.spec.tls.certificateRef
 		return result
 	}
 	// secretManager := LoadSecretManager(clientset, queue)
@@ -208,6 +207,7 @@ func main() {
 	// secretManager := monitorv2.NewSecretMonitor(clientset, queue)
 	secretManager := monitorv3.NewManager(clientset, queue)
 
+	// secret watcher handler
 	secreth := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			key, _ := cache.MetaNamespaceKeyFunc(obj)
@@ -215,7 +215,8 @@ func main() {
 			secret := obj.(*v1.Secret)
 			klog.Info("Secret added ", "obj ", secret.ResourceVersion, " key ", key)
 
-			queue.Add("sandbox/route")
+			// secret added, process the associated route
+			queue.Add("sandbox/route") //hardcoded pass key instead
 
 		},
 		UpdateFunc: func(old interface{}, new interface{}) {
@@ -225,7 +226,8 @@ func main() {
 			secretNew := new.(*v1.Secret)
 			klog.Info("Secret updated ", "old ", secretOld.ResourceVersion, " new ", secretNew.ResourceVersion, " key ", key)
 
-			queue.Add("sandbox/route")
+			// secret updated, process the associated route
+			queue.Add("sandbox/route") //hardcoded
 		},
 		DeleteFunc: func(obj interface{}) {
 
@@ -235,24 +237,31 @@ func main() {
 			key, _ := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 
 			klog.Info("Secret deleted ", " obj ", secret.ResourceVersion, " key ", key)
-			queue.Add("sandbox/route")
+
+			// secret deleted, process the associated route
+			queue.Add("sandbox/route") //hardcoded
 		},
 	}
 
 	secretManager.WithSecretHandler(secreth)
 
-	h := cache.ResourceEventHandlerFuncs{
+	// Route watcher handler
+	routeh := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			key, _ := cache.MetaNamespaceKeyFunc(obj)
 
 			route := obj.(*routev1.Route)
-			klog.Info("Add Event ", "pod.Name ", route.Name, " key ", key)
+			klog.Info("Add Event ", "route.Name ", route.Name, " key ", key)
 			// if err == nil {
 			// 	queue.Add(key)
 			// }
 			//
 			// secretManager.RegisterRoute(pod)
-			secretManager.RegisterRoute(route, getSecretNames)
+			// when route is added, create a secret watcher
+			err := secretManager.RegisterRoute(route, getSecretNames)
+			if err != nil {
+				klog.Error("failed to register route")
+			}
 		},
 		UpdateFunc: func(old interface{}, new interface{}) {
 			key, err := cache.MetaNamespaceKeyFunc(new)
@@ -261,17 +270,17 @@ func main() {
 			newRoute := new.(*routev1.Route)
 			if err == nil && !reflect.DeepEqual(oldRoute.Spec, newRoute.Spec) {
 
-				klog.Info("Update controller ", "old ", oldRoute.ResourceVersion, " new ", newRoute.ResourceVersion, " key ", key)
+				klog.Info("Update event ", "old ", oldRoute.ResourceVersion, " new ", newRoute.ResourceVersion, " key ", key)
 				// queue.Add(key)
 
 				// secretManager.UnregisterRoute(oldPod)
 				// secretManager.RegisterRoute(newPod)
 
-				secretManager.UnregisterRoute(oldRoute, getSecretNames)
-				secretManager.RegisterRoute(newRoute, getSecretNames)
+				secretManager.UnregisterRoute(oldRoute, getSecretNames) // remove old watch
+				secretManager.RegisterRoute(newRoute, getSecretNames)   // create new watch
 			}
 
-			s, err := secretManager.GetSecret(newRoute, "", "")
+			s, err := secretManager.GetSecret(newRoute)
 			if err == nil {
 				klog.Info("fetching secret", s.Data)
 			} else {
@@ -284,19 +293,22 @@ func main() {
 			key, _ := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 
 			route := obj.(*routev1.Route)
-			klog.Info("Delete controller ", " obj ", route.ResourceVersion, " key ", key)
+			klog.Info("Delete event ", " obj ", route.ResourceVersion, " key ", key)
 			// if err == nil {
 			// 	queue.Add(key)
 			// }
 			// secretManager.UnregisterRoute(obj.(*v1.Pod))
+
+			// when route is deleted, remove associated secret watcher
 			secretManager.UnregisterRoute(route, getSecretNames)
 
 		},
 	}
 
-	indexer, informer := cache.NewIndexerInformer(podListWatcher, &routev1.Route{}, 0, h, cache.Indexers{})
+	// Route Controller
+	indexer, informer := cache.NewIndexerInformer(routeListWatcher, &routev1.Route{}, 0, routeh, cache.Indexers{})
 
-	controller := NewController(queue, indexer, informer, clientset, h)
+	controller := NewController(queue, indexer, informer, clientset /*routeh*/)
 
 	// Now let's start the controller
 	stop := make(chan struct{})
