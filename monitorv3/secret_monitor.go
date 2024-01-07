@@ -25,6 +25,7 @@ type SecretEventHandlerRegistration interface {
 	cache.ResourceEventHandlerRegistration
 
 	GetKey() ObjectKey
+	GetHandler() cache.ResourceEventHandlerRegistration
 }
 
 type SecretMonitor interface {
@@ -43,6 +44,10 @@ type secretEventHandlerRegistration struct {
 
 func (r *secretEventHandlerRegistration) GetKey() ObjectKey {
 	return r.objectKey
+}
+
+func (r *secretEventHandlerRegistration) GetHandler() cache.ResourceEventHandlerRegistration {
+	return r.ResourceEventHandlerRegistration
 }
 
 type sm struct {

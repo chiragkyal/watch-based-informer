@@ -308,7 +308,7 @@ func main() {
 
 			// when route is deleted, remove associated secret watcher
 			err := secretManager.UnregisterRoute(route, getSecretNames)
-			if err == nil {
+			if err != nil {
 				klog.Error(err)
 			}
 
