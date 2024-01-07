@@ -75,7 +75,7 @@ func (s *sm) AddEventHandler(namespace, name string, handler cache.ResourceEvent
 	// Hence route1_secret and route2_secret should denote separate key,
 	// so separate monitors inside a namespace.
 	key := ObjectKey{Namespace: namespace, Name: name}
-	klog.Info("ObjectKey %v ", key)
+	klog.Info("ObjectKey", key)
 
 	// Check if monitor / watch already exists
 	m, exists := s.monitors[key]
@@ -138,20 +138,26 @@ func (s *sm) RemoveEventHandler(handlerRegistration SecretEventHandlerRegistrati
 
 	key := handlerRegistration.GetKey()
 	// check if watch already exists for key
-	m, ok := s.monitors[key]
-	if !ok {
+	m, exists := s.monitors[key]
+	if !exists {
 		// already removed
+		klog.Info("handler already removed, key", key)
 		return nil
 	}
 
+	klog.Info("removing secret handler, key", key)
 	if err := m.RemoveEventHandler(handlerRegistration); err != nil {
+		klog.Error(err)
 		return err
 	}
 	klog.Info("secret handler removed", " item key", key)
 
 	// stop the watch/informer if there is no handler
+	klog.Info("numHandlers", m.numHandlers.Load())
 	if m.numHandlers.Load() <= 0 {
-		m.Stop()
+		if !m.Stop() {
+			klog.Error("failed to stop secret informer")
+		}
 		delete(s.monitors, key)
 		klog.Info("secret informer stopped ", " item key ", key)
 	}
@@ -165,6 +171,7 @@ func (s *sm) GetSecret(handlerRegistration SecretEventHandlerRegistration) (*v1.
 	defer s.lock.RUnlock()
 
 	key := handlerRegistration.GetKey()
+	klog.Info("Key for getsecret ", key)
 
 	// check if secret watch exists
 	m, exists := s.monitors[key]

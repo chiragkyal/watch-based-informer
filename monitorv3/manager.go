@@ -96,7 +96,7 @@ func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func
 	secretName := "dummy-secret"
 	key := generateKey(parent.Namespace, parent.Name, secretName)
 
-	handlerRegistration, err := m.monitor.AddEventHandler(parent.Namespace, key.Name, m.secretHandler)
+	handlerRegistration, err := m.monitor.AddEventHandler(key.Namespace, key.Name, m.secretHandler)
 	if err != nil {
 		return apierrors.NewInternalError(err)
 	}
@@ -120,6 +120,7 @@ func (m *Manager) UnregisterRoute(parent *routev1.Route, getReferencedObjects fu
 	// TODO hard coded to test since externalCertificate is TP
 	secretName := "dummy-secret"
 	key := generateKey(parent.Namespace, parent.Name, secretName)
+	klog.Info("trying to UnregisterRoute with key", key)
 
 	// grab registered handler
 	handlerRegistration, exists := m.registeredHandlers[key]
@@ -128,6 +129,7 @@ func (m *Manager) UnregisterRoute(parent *routev1.Route, getReferencedObjects fu
 		return apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key.Name))
 	}
 
+	klog.Info("trying to remove handler with key", key)
 	err := m.monitor.RemoveEventHandler(handlerRegistration)
 	if err != nil {
 		// return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)

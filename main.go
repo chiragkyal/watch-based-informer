@@ -270,15 +270,22 @@ func main() {
 			newRoute := new.(*routev1.Route)
 			if err == nil && !reflect.DeepEqual(oldRoute.Spec, newRoute.Spec) {
 
-				klog.Info("Update event ", "old ", oldRoute.ResourceVersion, " new ", newRoute.ResourceVersion, " key ", key)
+				klog.Info("Roue Update event ", "old ", oldRoute.ResourceVersion, " new ", newRoute.ResourceVersion, " key ", key)
 				// queue.Add(key)
 
 				// secretManager.UnregisterRoute(oldPod)
 				// secretManager.RegisterRoute(newPod)
 
-				secretManager.UnregisterRoute(oldRoute, getSecretNames) // remove old watch
-				secretManager.RegisterRoute(newRoute, getSecretNames)   // create new watch
+				if err := secretManager.UnregisterRoute(oldRoute, getSecretNames); err != nil {
+					klog.Error(err)
+				} // remove old watch
+
+				if err := secretManager.RegisterRoute(newRoute, getSecretNames); err != nil {
+					klog.Error(err)
+				} // create new watch
 			}
+
+			klog.Info("Roue Update event, No change ", "trying to GetSecret ", "new", newRoute.Name, "referenced secret", newRoute.Spec.TLS.ExternalCertificate.Name)
 
 			s, err := secretManager.GetSecret(newRoute)
 			if err == nil {
@@ -300,7 +307,10 @@ func main() {
 			// secretManager.UnregisterRoute(obj.(*v1.Pod))
 
 			// when route is deleted, remove associated secret watcher
-			secretManager.UnregisterRoute(route, getSecretNames)
+			err := secretManager.UnregisterRoute(route, getSecretNames)
+			if err == nil {
+				klog.Error(err)
+			}
 
 		},
 	}

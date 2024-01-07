@@ -55,6 +55,7 @@ func (i *singleItemMonitor) Stop() bool {
 	}
 	i.stopped = true
 	close(i.stopCh)
+	klog.Info("informer stopped")
 	return true
 }
 
