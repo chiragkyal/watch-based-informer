@@ -7,17 +7,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 )
-
-type listObjectFunc func(string, metav1.ListOptions) (runtime.Object, error)
-type watchObjectFunc func(string, metav1.ListOptions) (watch.Interface, error)
 
 type SecretEventHandlerRegistration interface {
 	cache.ResourceEventHandlerRegistration
@@ -27,10 +21,11 @@ type SecretEventHandlerRegistration interface {
 }
 
 type SecretMonitor interface {
-	AddEventHandler(namespace, name string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
-
+	//
+	AddEventHandler(namespace, routeSecretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
+	//
 	RemoveEventHandler(SecretEventHandlerRegistration) error
-
+	//
 	GetSecret(SecretEventHandlerRegistration) (*v1.Secret, error)
 }
 
@@ -49,9 +44,6 @@ func (r *secretEventHandlerRegistration) GetHandler() cache.ResourceEventHandler
 }
 
 type sm struct {
-	// listObject  listObjectFunc
-	// watchObject watchObjectFunc
-
 	kubeClient kubernetes.Interface
 
 	lock sync.RWMutex

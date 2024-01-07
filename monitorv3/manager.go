@@ -50,6 +50,62 @@ func (m *Manager) WithSecretHandler(handler cache.ResourceEventHandlerFuncs) *Ma
 	return m
 }
 
+func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func(*routev1.Route) sets.String) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	// TODO refactor later, get referenced secretName from route
+	// names := getReferencedObjects(parent)
+	// secretName <-- names[0]
+
+	// TODO hard coded to test since externalCertificate is TP
+	secretName := "dummy-secret"
+	key := generateKey(parent.Namespace, parent.Name, secretName)
+
+	handlerRegistration, err := m.monitor.AddEventHandler(key.Namespace, key.Name, m.secretHandler)
+	if err != nil {
+		return apierrors.NewInternalError(err)
+	}
+	m.registeredHandlers[key] = handlerRegistration
+	klog.Info("secret manager registered route ", key)
+
+	return nil
+}
+
+func (m *Manager) UnregisterRoute(parent *routev1.Route, getReferencedObjects func(*routev1.Route) sets.String) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	// TODO refactor later, get referenced secretName from route
+	// names := getReferencedObjects(parent)
+	// secretName <-- names[0]
+
+	// TODO hard coded to test since externalCertificate is TP
+	secretName := "dummy-secret"
+	key := generateKey(parent.Namespace, parent.Name, secretName)
+	klog.Info("trying to UnregisterRoute with key", key)
+
+	// grab registered handler
+	handlerRegistration, exists := m.registeredHandlers[key]
+	if !exists {
+		//return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
+		return apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key.Name))
+	}
+
+	klog.Info("trying to remove handler with key", key)
+	err := m.monitor.RemoveEventHandler(handlerRegistration)
+	if err != nil {
+		// return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
+		return apierrors.NewInternalError(err)
+	}
+
+	// delete registered handler from the map
+	delete(m.registeredHandlers, key)
+	klog.Info("secret manager unregistered route ", key)
+
+	return nil
+}
+
 // Get secret object from informer's cache.
 // It will first check HasSynced()
 func (m *Manager) GetSecret(parent *routev1.Route) (*v1.Secret, error) {
@@ -82,66 +138,6 @@ func (m *Manager) GetSecret(parent *routev1.Route) (*v1.Secret, error) {
 	}
 
 	return obj, nil
-}
-
-func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func(*routev1.Route) sets.String) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	// TODO refactor later, get referenced secretName from route
-	// names := getReferencedObjects(parent)
-	// secretName <-- names[0]
-
-	// TODO hard coded to test since externalCertificate is TP
-	secretName := "dummy-secret"
-	key := generateKey(parent.Namespace, parent.Name, secretName)
-
-	handlerRegistration, err := m.monitor.AddEventHandler(key.Namespace, key.Name, m.secretHandler)
-	if err != nil {
-		return apierrors.NewInternalError(err)
-	}
-
-	m.registeredHandlers[key] = handlerRegistration
-
-	klog.Info("secret manager registered route", " route", key)
-
-	return nil
-
-}
-
-func (m *Manager) UnregisterRoute(parent *routev1.Route, getReferencedObjects func(*routev1.Route) sets.String) error {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
-	// TODO refactor later, get referenced secretName from route
-	// names := getReferencedObjects(parent)
-	// secretName <-- names[0]
-
-	// TODO hard coded to test since externalCertificate is TP
-	secretName := "dummy-secret"
-	key := generateKey(parent.Namespace, parent.Name, secretName)
-	klog.Info("trying to UnregisterRoute with key", key)
-
-	// grab registered handler
-	handlerRegistration, exists := m.registeredHandlers[key]
-	if !exists {
-		//return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
-		return apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key.Name))
-	}
-
-	klog.Info("trying to remove handler with key", key)
-	err := m.monitor.RemoveEventHandler(handlerRegistration)
-	if err != nil {
-		// return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
-		return apierrors.NewInternalError(err)
-	}
-
-	// delete registered handler from the map
-	delete(m.registeredHandlers, key)
-
-	klog.Info("secret manager unregistered route", " route", key)
-
-	return nil
 }
 
 func generateKey(namespace, routeName, secretName string) ObjectKey {
