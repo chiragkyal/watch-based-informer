@@ -7,11 +7,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -69,48 +67,30 @@ func NewSecretMonitor(kubeClient *kubernetes.Clientset) SecretMonitor {
 	}
 }
 
-// create/update secret watch
-// TODO: Think what is the best place to create ObjectKey{},
-func (s *sm) AddEventHandler(namespace, name string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
+// create/update secret watch.
+// routeSecretName is a combination of "routename_secretname"
+func (s *sm) AddEventHandler(namespace, routeSecretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	// name is a combination of "routename_secretname"
+	if !validateName(routeSecretName) {
+		return nil, fmt.Errorf("invalid routeSecretName combination : %s", routeSecretName)
+	}
+
 	// Inside a namespace multiple route can refer a common secret.
 	// Hence route1_secret and route2_secret should denote separate key,
 	// so separate monitors inside a namespace.
-	key := ObjectKey{Namespace: namespace, Name: name}
-	klog.Info("ObjectKey", key)
+	key := NewObjectKey(namespace, routeSecretName)
 
 	// Check if monitor / watch already exists
 	m, exists := s.monitors[key]
-
-	// TODO refactor this later
 	if !exists {
-		// fieldSelector := fields.Set{"metadata.name": secretName}.AsSelector().String()
-		// listFunc := func(options metav1.ListOptions) (runtime.Object, error) {
-		// 	options.FieldSelector = fieldSelector
-		//
-		// 	klog.Info(fieldSelector)
-		// 	return s.listObject(namespace, options)
-		// }
-		// watchFunc := func(options metav1.ListOptions) (watch.Interface, error) {
-		// 	options.FieldSelector = fieldSelector
-		//
-		// 	klog.Info(fieldSelector)
-		// 	return s.watchObject(namespace, options)
-		// }
-		//
-		// store, informer := cache.NewInformer(
-		// 	&cache.ListWatch{ListFunc: listFunc, WatchFunc: watchFunc},
-		// 	&v1.Secret{},
-		// 	0, handler)
+		secretName, err := getSecretName(routeSecretName, true)
+		if err != nil {
+			return nil, err
+		}
 
-		// extract secretName and create a monitor for only that secret
-		// TODO: put inside if statement, to handle index out of bound
-		// TODO: can use GetItemKey()
-		secretName := strings.Split(name, "_")[1]
-
+		// create a single secret monitor
 		sharedInformer := cache.NewSharedInformer(
 			cache.NewListWatchFromClient(
 				s.kubeClient.CoreV1().RESTClient(),
@@ -158,7 +138,6 @@ func (s *sm) RemoveEventHandler(handlerRegistration SecretEventHandlerRegistrati
 	klog.Info("secret handler removed", " item key", key)
 
 	// stop the watch/informer if there is no handler
-	klog.Info("numHandlers", m.numHandlers.Load())
 	if m.numHandlers.Load() <= 0 {
 		if !m.Stop() {
 			klog.Error("failed to stop secret informer")
@@ -176,33 +155,52 @@ func (s *sm) GetSecret(handlerRegistration SecretEventHandlerRegistration) (*v1.
 	defer s.lock.RUnlock()
 
 	key := handlerRegistration.GetKey()
-	klog.Info("Key for getsecret ", key)
 
 	// check if secret watch exists
 	m, exists := s.monitors[key]
-
 	if !exists {
-		klog.Error("secret monitor doesn't exist for key", key)
-		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, m.GetItemKey())
+		return nil, fmt.Errorf("secret monitor doesn't exist for key %v", key)
 	}
 
-	// should take key as argument
-	uncast, exists, err := m.GetItem()
-	if !exists {
-		klog.Error("secret doesn't exist in cache", key)
-		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, m.GetItemKey())
-	}
-
+	secretName, err := getSecretName(key.Name, false)
 	if err != nil {
-		klog.Error("unable to get secret from cache", key)
 		return nil, err
 	}
 
-	ret, ok := uncast.(*v1.Secret)
+	uncast, exists, err := m.GetItem(secretName)
+	if !exists {
+		return nil, fmt.Errorf("secret %s doesn't exist in cache", secretName)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	secret, ok := uncast.(*v1.Secret)
 	if !ok {
 		return nil, fmt.Errorf("unexpected type: %T", uncast)
 	}
 
-	return ret, nil
+	return secret, nil
+}
 
+func getSecretName(routeSecretName string, isValidated bool) (string, error) {
+	if !isValidated {
+		if !validateName(routeSecretName) {
+			return "", fmt.Errorf("invalid routeSecretName combination : %s", routeSecretName)
+		}
+	}
+	return strings.Split(routeSecretName, "_")[1], nil
+}
+
+// validateName checks whether 'routeSecretName' follows
+// the combination of routeName_secretName
+func validateName(routeSecretName string) bool {
+	if keys := strings.Split(routeSecretName, "_"); len(keys) == 2 {
+		if len(keys[0]) > 0 && len(keys[1]) > 0 {
+			return true
+		}
+		return false
+	}
+	return false
 }

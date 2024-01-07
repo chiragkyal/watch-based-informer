@@ -1,8 +1,6 @@
 package monitorv3
 
 import (
-	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -12,8 +10,7 @@ import (
 
 type ObjectKey struct {
 	Namespace string
-	// Name is usually a combination of routeName_secretName
-	Name string
+	Name      string
 }
 
 type singleItemMonitor struct {
@@ -63,23 +60,6 @@ func (i *singleItemMonitor) HasSynced() bool {
 	return i.informer.HasSynced()
 }
 
-// func (c *singleItemMonitor) GetByKey(name string) (interface{}, bool, error) {
-// 	return c.store.GetByKey(name)
-// }
-//
-// func (c *singleItemMonitor) GetKey() objectKey {
-// 	return c.key
-// }
-
-// key returns key of an object with a given name and namespace.
-// This has to be in-sync with cache.MetaNamespaceKeyFunc.
-// func (c *singleItemMonitor) Key(namespace, name string) string {
-// 	if len(namespace) > 0 {
-// 		return namespace + "/" + name
-// 	}
-// 	return name
-// }
-
 func (i *singleItemMonitor) StartInformer() {
 	klog.Info("starting informer")
 	i.informer.Run(i.stopCh)
@@ -106,16 +86,10 @@ func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistra
 	return nil
 }
 
-// TODO: should we move this inside secret_monitor.go ?
-func (i *singleItemMonitor) GetItemKey() string {
-	if keys := strings.Split(i.key.Name, "_"); len(keys) == 2 {
-		return keys[1]
-	}
-
-	return ""
-}
-
-func (i *singleItemMonitor) GetItem() (item interface{}, exists bool, err error) {
-	itemKey := i.GetItemKey()
-	return i.informer.GetStore().GetByKey(fmt.Sprintf("%s/%s", i.key.Namespace, itemKey))
+// GetItem returns the accumulator from a given itemName
+// which denotes metadata.name of a resource being monitorned
+// by informer, and may not be always i.key.Name
+func (i *singleItemMonitor) GetItem(itemName string) (item interface{}, exists bool, err error) {
+	keyFunc := i.key.Namespace + "/" + itemName
+	return i.informer.GetStore().GetByKey(keyFunc)
 }
