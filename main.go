@@ -285,11 +285,11 @@ func main() {
 				} // create new watch
 			}
 
-			klog.Info("Roue Update event, No change ", "trying to GetSecret ", "new", newRoute.Name, "referenced secret", newRoute.Spec.TLS.ExternalCertificate.Name)
+			klog.Info("Roue Update event, No change ", "trying to GetSecret ", "new", newRoute.Name, " referenced secret", newRoute.Spec.TLS.ExternalCertificate.Name)
 
 			s, err := secretManager.GetSecret(newRoute)
 			if err == nil {
-				klog.Info("fetching secret", s.Data)
+				klog.Info("fetching secret data ", s.Data)
 			} else {
 				klog.Error(err)
 			}

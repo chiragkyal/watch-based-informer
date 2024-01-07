@@ -182,16 +182,19 @@ func (s *sm) GetSecret(handlerRegistration SecretEventHandlerRegistration) (*v1.
 	m, exists := s.monitors[key]
 
 	if !exists {
+		klog.Error("secret monitor doesn't exist for key", key)
 		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, m.GetItemKey())
 	}
 
 	// should take key as argument
 	uncast, exists, err := m.GetItem()
 	if !exists {
+		klog.Error("secret doesn't exist in cache", key)
 		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, m.GetItemKey())
 	}
 
 	if err != nil {
+		klog.Error("unable to get secret from cache", key)
 		return nil, err
 	}
 
