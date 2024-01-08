@@ -14,18 +14,12 @@ type ObjectKey struct {
 }
 
 type singleItemMonitor struct {
-	key ObjectKey
-	// store    cache.Store
-	// informer cache.Controller
-	informer cache.SharedInformer
-
-	// waitGroup is used to ensure that there won't be two concurrent calls to reflector.Run
-	// waitGroup sync.WaitGroup
+	key         ObjectKey
+	informer    cache.SharedInformer
 	numHandlers atomic.Int32
-
-	lock    sync.Mutex
-	stopped bool
-	stopCh  chan struct{}
+	lock        sync.Mutex
+	stopped     bool
+	stopCh      chan struct{}
 }
 
 func NewObjectKey(namespace, name string) ObjectKey {
@@ -43,7 +37,16 @@ func newSingleItemMonitor(key ObjectKey, informer cache.SharedInformer) *singleI
 	}
 }
 
-func (i *singleItemMonitor) Stop() bool {
+func (i *singleItemMonitor) HasSynced() bool {
+	return i.informer.HasSynced()
+}
+
+func (i *singleItemMonitor) StartInformer() {
+	klog.Info("starting informer")
+	i.informer.Run(i.stopCh)
+}
+
+func (i *singleItemMonitor) StopInfromer() bool {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
@@ -54,15 +57,6 @@ func (i *singleItemMonitor) Stop() bool {
 	close(i.stopCh)
 	klog.Info("informer stopped")
 	return true
-}
-
-func (i *singleItemMonitor) HasSynced() bool {
-	return i.informer.HasSynced()
-}
-
-func (i *singleItemMonitor) StartInformer() {
-	klog.Info("starting informer")
-	i.informer.Run(i.stopCh)
 }
 
 func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {

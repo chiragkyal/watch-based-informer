@@ -131,7 +131,7 @@ func (s *sm) RemoveEventHandler(handlerRegistration SecretEventHandlerRegistrati
 
 	// stop the watch/informer if there is no handler
 	if m.numHandlers.Load() <= 0 {
-		if !m.Stop() {
+		if !m.StopInfromer() {
 			klog.Error("failed to stop secret informer")
 		}
 		delete(s.monitors, key)

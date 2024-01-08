@@ -4,6 +4,7 @@ package monitorv3
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -16,13 +17,19 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// Remove global variable, can cause issue
 var (
 	testNamespace  = "testNamespace"
 	testSecretName = "testSecretName"
 	testRouteName  = "testRouteName"
 )
 
-func newInformer(ctx context.Context, fakeKubeClient *fake.Clientset, namespace string) cache.SharedInformer {
+func fakeMonitor(ctx context.Context, fakeKubeClient *fake.Clientset, key ObjectKey) *singleItemMonitor {
+	sharedInformer := fakeInformer(ctx, fakeKubeClient, key.Namespace)
+	return newSingleItemMonitor(key, sharedInformer)
+}
+
+func fakeInformer(ctx context.Context, fakeKubeClient *fake.Clientset, namespace string) cache.SharedInformer {
 	return cache.NewSharedInformer(&cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 			return fakeKubeClient.CoreV1().Secrets(namespace).List(ctx, options)
@@ -40,7 +47,7 @@ func fakeSecret(namespace, name string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: testNamespace,
+			Namespace: namespace,
 		},
 		Data: map[string][]byte{
 			"test": {},
@@ -52,9 +59,12 @@ func fakeSecret(namespace, name string) *corev1.Secret {
 - Scenarios
 	- Informer is running properly
 	- Informer is stopped properly
-	 	- Dual stop should return false
-	- AddEventHandler should increase the count by 1, check error
-	- RemoveEventHandler should decrease the count by 1, check error
+		- return true
+		- i.stopped will be true
+		- channel should be closed
+	 	- twice stop should return false
+	- RemoveEventHandler should decrease the count by 1, check error when handler is tampered
+	- GetItem when item is not present, unable to cast, error
 */
 
 func TestMonitor(t *testing.T) {
@@ -63,9 +73,9 @@ func TestMonitor(t *testing.T) {
 	ctx, shutdown := context.WithCancel(context.Background())
 	defer shutdown()
 
-	sharedInformer := newInformer(ctx, fakeKubeClient, testNamespace)
-	name := fmt.Sprintf("%s_%s", testRouteName, testSecretName)
-	singleItemMonitor := newSingleItemMonitor(ObjectKey{Name: name, Namespace: testNamespace}, sharedInformer)
+	sharedInformer := fakeInformer(ctx, fakeKubeClient, testNamespace)
+	routeSecetName := fmt.Sprintf("%s_%s", testRouteName, testSecretName)
+	singleItemMonitor := newSingleItemMonitor(NewObjectKey(testNamespace, routeSecetName), sharedInformer)
 
 	go singleItemMonitor.StartInformer()
 	if !cache.WaitForCacheSync(ctx.Done(), singleItemMonitor.HasSynced) {
@@ -80,8 +90,6 @@ func TestMonitor(t *testing.T) {
 			}
 			queue <- secret.Name
 		},
-		UpdateFunc: func(oldObj, newObj interface{}) {},
-		DeleteFunc: func(obj interface{}) {},
 	}
 	var intr cache.ResourceEventHandler
 	intr = handlerfunc
@@ -123,10 +131,99 @@ func TestMonitor(t *testing.T) {
 		if singleItemMonitor.numHandlers.Load() != 0 {
 			t.Errorf("expected %d handler got %d", 0, singleItemMonitor.numHandlers.Load())
 		}
-		if !singleItemMonitor.Stop() {
+		if !singleItemMonitor.StopInfromer() {
 			t.Error("failed to stop informer")
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("test timeout")
+	}
+}
+
+func TestAddEventHandler(t *testing.T) {
+	fakeKubeClient := fake.NewSimpleClientset()
+	key := NewObjectKey("namespace", "name")
+	monitor := fakeMonitor(context.TODO(), fakeKubeClient, key)
+
+	handlerRegistration, err := monitor.AddEventHandler(cache.ResourceEventHandlerFuncs{})
+	if err != nil {
+		t.Errorf("got error %v", err)
+	}
+	if monitor.numHandlers.Load() != 1 {
+		t.Errorf("expected %d handler got %d", 1, monitor.numHandlers.Load())
+	}
+	if !reflect.DeepEqual(handlerRegistration.GetKey(), key) {
+		t.Errorf("expected key %v got key %v", key, handlerRegistration.GetKey())
+	}
+}
+
+func TestRemoveEventHandler(t *testing.T) {
+
+	scenarios := []struct {
+		name         string
+		isNilHandler bool
+		numhandler   int32
+		expectErr    bool
+	}{
+		{
+			name:         "nil handler is provided",
+			isNilHandler: true,
+			numhandler:   1,
+			expectErr:    true,
+		},
+		{
+			name:         "correct handler is provided",
+			isNilHandler: false,
+			numhandler:   0,
+			expectErr:    false,
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+
+			fakeKubeClient := fake.NewSimpleClientset()
+			monitor := fakeMonitor(context.TODO(), fakeKubeClient, ObjectKey{})
+			handlerRegistration, _ := monitor.AddEventHandler(cache.ResourceEventHandlerFuncs{})
+			if s.isNilHandler {
+				handlerRegistration = nil
+			}
+
+			// for handling nil pointer dereference
+			defer func() {
+				if err := recover(); err != nil && !s.expectErr {
+					t.Errorf("unexpected error %v", err)
+				}
+				if monitor.numHandlers.Load() != s.numhandler {
+					t.Errorf("expected %d handler got %d", s.numhandler, monitor.numHandlers.Load())
+				}
+			}()
+
+			gotErr := monitor.RemoveEventHandler(handlerRegistration)
+			if gotErr != nil && !s.expectErr {
+				t.Errorf("unexpected error %v", gotErr)
+			}
+			if gotErr == nil && s.expectErr {
+				t.Errorf("expecting an error, got nil")
+			}
+		})
+	}
+}
+
+func TestScenarios(t *testing.T) {
+
+	scenarios := []struct {
+		name       string
+		routeName  string
+		secretName string
+		expected   string
+		numErr     int
+	}{
+		{},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+
+		})
 	}
 }
