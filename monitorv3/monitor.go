@@ -1,6 +1,7 @@
 package monitorv3
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -60,6 +61,10 @@ func (i *singleItemMonitor) StopInformer() bool {
 }
 
 func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
+	if i.stopped {
+		return nil, fmt.Errorf("can not add hanler %v to already stopped informer", handler)
+	}
+
 	registration, err := i.informer.AddEventHandler(handler)
 	if err != nil {
 		return nil, err

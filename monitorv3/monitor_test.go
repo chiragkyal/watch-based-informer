@@ -55,12 +55,6 @@ func fakeSecret(namespace, name string) *corev1.Secret {
 	}
 }
 
-/*
-- Scenarios
-
-	- GetItem when item is not present, unable to cast, error
-*/
-
 func TestMonitor(t *testing.T) {
 	fakeKubeClient := fake.NewSimpleClientset(fakeSecret(testNamespace, testSecretName))
 	queue := make(chan string)
@@ -216,20 +210,55 @@ func TestStopInformer(t *testing.T) {
 }
 
 func TestAddEventHandler(t *testing.T) {
-	fakeKubeClient := fake.NewSimpleClientset()
-	key := NewObjectKey("namespace", "name")
-	monitor := fakeMonitor(context.TODO(), fakeKubeClient, key)
+	scenarios := []struct {
+		name       string
+		isStop     bool
+		numhandler int32
+		expectErr  bool
+	}{
+		{
+			name:       "add handler to stopped informer",
+			isStop:     true,
+			numhandler: 0,
+			expectErr:  true,
+		},
+		{
+			name:       "correctly add handler to informer",
+			isStop:     false,
+			numhandler: 1,
+			expectErr:  false,
+		},
+	}
 
-	handlerRegistration, err := monitor.AddEventHandler(cache.ResourceEventHandlerFuncs{})
-	if err != nil {
-		t.Errorf("got error %v", err)
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			fakeKubeClient := fake.NewSimpleClientset()
+			key := NewObjectKey("namespace", "name")
+			monitor := fakeMonitor(context.TODO(), fakeKubeClient, key)
+			go monitor.StartInformer()
+
+			if s.isStop {
+				monitor.StopInformer()
+			}
+
+			handlerRegistration, gotErr := monitor.AddEventHandler(cache.ResourceEventHandlerFuncs{})
+			if gotErr != nil && !s.expectErr {
+				t.Errorf("unexpected error %v", gotErr)
+			}
+			if gotErr == nil && s.expectErr {
+				t.Errorf("expecting an error, got nil")
+			}
+			if monitor.numHandlers.Load() != s.numhandler {
+				t.Errorf("expected %d handler got %d", s.numhandler, monitor.numHandlers.Load())
+			}
+			if !s.isStop { // for handling nil pointer dereference
+				if !reflect.DeepEqual(handlerRegistration.GetKey(), key) {
+					t.Errorf("expected key %v got key %v", key, handlerRegistration.GetKey())
+				}
+			}
+		})
 	}
-	if monitor.numHandlers.Load() != 1 {
-		t.Errorf("expected %d handler got %d", 1, monitor.numHandlers.Load())
-	}
-	if !reflect.DeepEqual(handlerRegistration.GetKey(), key) {
-		t.Errorf("expected key %v got key %v", key, handlerRegistration.GetKey())
-	}
+
 }
 
 func TestRemoveEventHandler(t *testing.T) {
@@ -284,21 +313,21 @@ func TestRemoveEventHandler(t *testing.T) {
 	}
 }
 
-func TestScenarios(t *testing.T) {
+/*
+- Scenarios
 
+	- GetItem when item is not present, unable to cast, error
+*/
+
+func TestGetItem(t *testing.T) {
 	scenarios := []struct {
-		name       string
-		routeName  string
-		secretName string
-		expected   string
-		numErr     int
+		name string
 	}{
 		{},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-
 		})
 	}
 }
