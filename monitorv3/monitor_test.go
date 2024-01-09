@@ -3,13 +3,11 @@ package monitorv3
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -17,19 +15,12 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// Remove global variable, can cause issue
-var (
-	testNamespace  = "testNamespace"
-	testSecretName = "testSecretName"
-	testRouteName  = "testRouteName"
-)
-
 func fakeMonitor(ctx context.Context, fakeKubeClient *fake.Clientset, key ObjectKey) *singleItemMonitor {
-	sharedInformer := fakeInformer(ctx, fakeKubeClient, key.Namespace)
+	sharedInformer := fakeSecretInformer(ctx, fakeKubeClient, key.Namespace)
 	return newSingleItemMonitor(key, sharedInformer)
 }
 
-func fakeInformer(ctx context.Context, fakeKubeClient *fake.Clientset, namespace string) cache.SharedInformer {
+func fakeSecretInformer(ctx context.Context, fakeKubeClient *fake.Clientset, namespace string) cache.SharedInformer {
 	return cache.NewSharedInformer(&cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 			return fakeKubeClient.CoreV1().Secrets(namespace).List(ctx, options)
@@ -50,80 +41,8 @@ func fakeSecret(namespace, name string) *corev1.Secret {
 			Namespace: namespace,
 		},
 		Data: map[string][]byte{
-			"test": {},
+			"test": {1, 2, 3, 4},
 		},
-	}
-}
-
-func TestMonitor(t *testing.T) {
-	fakeKubeClient := fake.NewSimpleClientset(fakeSecret(testNamespace, testSecretName))
-	queue := make(chan string)
-	ctx, shutdown := context.WithCancel(context.Background())
-	defer shutdown()
-
-	sharedInformer := fakeInformer(ctx, fakeKubeClient, testNamespace)
-	routeSecetName := fmt.Sprintf("%s_%s", testRouteName, testSecretName)
-	singleItemMonitor := newSingleItemMonitor(NewObjectKey(testNamespace, routeSecetName), sharedInformer)
-
-	go singleItemMonitor.StartInformer()
-	if !cache.WaitForCacheSync(ctx.Done(), singleItemMonitor.HasSynced) {
-		t.Fatal("cache not synced yet")
-	}
-
-	handlerfunc := cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			secret, ok := obj.(*corev1.Secret)
-			if !ok {
-				t.Errorf("invalid object")
-			}
-			queue <- secret.Name
-		},
-	}
-	var intr cache.ResourceEventHandler
-	intr = handlerfunc
-	handlerRegistration, err := singleItemMonitor.AddEventHandler(intr)
-	if err != nil {
-		t.Errorf("got error %v", err)
-	}
-
-	if singleItemMonitor.numHandlers.Load() != 1 {
-		t.Errorf("expected %d handler got %d", 1, singleItemMonitor.numHandlers.Load())
-	}
-
-	select {
-	case s := <-queue:
-		if s != testSecretName {
-			t.Errorf("expected %s got %s", testSecretName, s)
-		}
-
-		// get secret
-		uncast, exists, err := singleItemMonitor.GetItem(testSecretName)
-		if err != nil {
-			t.Error(err)
-		}
-		if !exists {
-			t.Error("secret does not exist")
-		}
-		ret, ok := uncast.(*v1.Secret)
-		if !ok {
-			t.Errorf("unexpected type: %T", uncast)
-		}
-		if s != ret.Name {
-			t.Errorf("expected %s got %s", ret.Name, s)
-		}
-
-		err = singleItemMonitor.RemoveEventHandler(handlerRegistration)
-		if err != nil {
-			t.Errorf("got error : %v", err.Error())
-		}
-		if singleItemMonitor.numHandlers.Load() != 0 {
-			t.Errorf("expected %d handler got %d", 0, singleItemMonitor.numHandlers.Load())
-		}
-		if !singleItemMonitor.StopInformer() {
-			t.Error("failed to stop informer")
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("test timeout")
 	}
 }
 
@@ -313,21 +232,64 @@ func TestRemoveEventHandler(t *testing.T) {
 	}
 }
 
-/*
-- Scenarios
-
-	- GetItem when item is not present, unable to cast, error
-*/
-
 func TestGetItem(t *testing.T) {
+	var (
+		namespace = "sandbox"
+		name      = "secretName"
+	)
 	scenarios := []struct {
-		name string
+		name            string
+		itemName        string
+		expectExist     bool
+		expectUncastErr bool
 	}{
-		{},
+		{
+			name:            "looking for item which is not present",
+			itemName:        "wrongName",
+			expectExist:     false,
+			expectUncastErr: true,
+		},
+		{
+			name:            "looking for correct item",
+			itemName:        name,
+			expectExist:     true,
+			expectUncastErr: false,
+		},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
+			secret := fakeSecret(namespace, name)
+			fakeKubeClient := fake.NewSimpleClientset(secret)
+			monitor := fakeMonitor(context.TODO(), fakeKubeClient, NewObjectKey(namespace, name))
+
+			go monitor.StartInformer()
+			if !cache.WaitForCacheSync(context.TODO().Done(), monitor.HasSynced) {
+				t.Fatal("cache not synced yet")
+			}
+
+			uncast, exists, err := monitor.GetItem(s.itemName)
+
+			if err != nil {
+				t.Error(err)
+			}
+			if !exists && s.expectExist {
+				t.Error("item does not exist")
+			}
+			if exists && !s.expectExist {
+				t.Error("item should not exist")
+			}
+
+			ret, ok := uncast.(*corev1.Secret)
+			if !ok && !s.expectUncastErr {
+				t.Errorf("unable to uncast")
+			}
+			if ok && s.expectUncastErr {
+				t.Errorf("should not be able to uncast")
+			}
+			if ret != nil && !reflect.DeepEqual(secret, ret) {
+				t.Errorf("expected %v got %v", secret, ret)
+			}
 		})
 	}
 }
