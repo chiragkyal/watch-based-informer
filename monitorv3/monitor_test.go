@@ -57,13 +57,7 @@ func fakeSecret(namespace, name string) *corev1.Secret {
 
 /*
 - Scenarios
-	- Informer is running properly
-	- Informer is stopped properly
-		- return true
-		- i.stopped will be true
-		- channel should be closed
-	 	- twice stop should return false
-	- RemoveEventHandler should decrease the count by 1, check error when handler is tampered
+
 	- GetItem when item is not present, unable to cast, error
 */
 
@@ -131,11 +125,93 @@ func TestMonitor(t *testing.T) {
 		if singleItemMonitor.numHandlers.Load() != 0 {
 			t.Errorf("expected %d handler got %d", 0, singleItemMonitor.numHandlers.Load())
 		}
-		if !singleItemMonitor.StopInfromer() {
+		if !singleItemMonitor.StopInformer() {
 			t.Error("failed to stop informer")
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("test timeout")
+	}
+}
+
+func TestStartInformer(t *testing.T) {
+	scenarios := []struct {
+		name      string
+		isClosed  bool
+		expectErr bool
+	}{
+		{
+			name:      "pass closed channel into informer",
+			isClosed:  true,
+			expectErr: true,
+		},
+		{
+			name:      "pass unclosed channel into informer",
+			isClosed:  false,
+			expectErr: false,
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			fakeKubeClient := fake.NewSimpleClientset()
+			monitor := fakeMonitor(context.TODO(), fakeKubeClient, ObjectKey{})
+			if s.isClosed {
+				close(monitor.stopCh)
+			}
+			go monitor.StartInformer()
+
+			select {
+			// this case will execute if stopCh is closed
+			case <-monitor.stopCh:
+				if !s.expectErr {
+					t.Error("informer is not running")
+				}
+			default:
+				t.Log("informer is running")
+			}
+		})
+	}
+}
+
+func TestStopInformer(t *testing.T) {
+	scenarios := []struct {
+		name           string
+		alreadyStopped bool
+		expect         bool
+	}{
+		{
+			name:           "stopping already stopped informer",
+			alreadyStopped: true,
+			expect:         false,
+		},
+		{
+			name:           "correctly stopped informer",
+			alreadyStopped: false,
+			expect:         true,
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			fakeKubeClient := fake.NewSimpleClientset()
+			monitor := fakeMonitor(context.TODO(), fakeKubeClient, ObjectKey{})
+			go monitor.StartInformer()
+
+			if s.alreadyStopped {
+				monitor.StopInformer()
+			}
+			if monitor.StopInformer() != s.expect {
+				t.Error("unexpected result")
+			}
+
+			select {
+			// this case will execute if stopCh is closed
+			case <-monitor.stopCh:
+				t.Log("informer successfully stopped")
+			default:
+				t.Error("informer is still running")
+			}
+		})
 	}
 }
 
@@ -157,7 +233,6 @@ func TestAddEventHandler(t *testing.T) {
 }
 
 func TestRemoveEventHandler(t *testing.T) {
-
 	scenarios := []struct {
 		name         string
 		isNilHandler bool
@@ -180,7 +255,6 @@ func TestRemoveEventHandler(t *testing.T) {
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
-
 			fakeKubeClient := fake.NewSimpleClientset()
 			monitor := fakeMonitor(context.TODO(), fakeKubeClient, ObjectKey{})
 			handlerRegistration, _ := monitor.AddEventHandler(cache.ResourceEventHandlerFuncs{})
@@ -193,6 +267,7 @@ func TestRemoveEventHandler(t *testing.T) {
 				if err := recover(); err != nil && !s.expectErr {
 					t.Errorf("unexpected error %v", err)
 				}
+				// always check numHandlers
 				if monitor.numHandlers.Load() != s.numhandler {
 					t.Errorf("expected %d handler got %d", s.numhandler, monitor.numHandlers.Load())
 				}

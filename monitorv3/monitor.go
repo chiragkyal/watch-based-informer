@@ -46,7 +46,7 @@ func (i *singleItemMonitor) StartInformer() {
 	i.informer.Run(i.stopCh)
 }
 
-func (i *singleItemMonitor) StopInfromer() bool {
+func (i *singleItemMonitor) StopInformer() bool {
 	i.lock.Lock()
 	defer i.lock.Unlock()
 
