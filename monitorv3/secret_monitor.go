@@ -24,7 +24,7 @@ type SecretMonitor interface {
 	//
 	AddSecretEventHandler(namespace, routeSecretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
 	//
-	RemoveEventHandler(SecretEventHandlerRegistration) error
+	RemoveSecretEventHandler(SecretEventHandlerRegistration) error
 	//
 	GetSecret(SecretEventHandlerRegistration) (*v1.Secret, error)
 }
@@ -109,33 +109,34 @@ func (s *secretMonitor) AddSecretEventHandler(namespace, routeSecretName string,
 }
 
 // Remove secret watch
-func (s *secretMonitor) RemoveEventHandler(handlerRegistration SecretEventHandlerRegistration) error {
+func (s *secretMonitor) RemoveSecretEventHandler(handlerRegistration SecretEventHandlerRegistration) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
+	if handlerRegistration == nil {
+		return fmt.Errorf("secret handler is nil")
+	}
 	key := handlerRegistration.GetKey()
+
 	// check if watch already exists for key
 	m, exists := s.monitors[key]
 	if !exists {
-		// already removed
-		klog.Info("handler already removed, key", key)
+		klog.Info("secret monitor already removed", " item key", key)
 		return nil
 	}
 
-	klog.Info("removing secret handler, key", key)
 	if err := m.RemoveEventHandler(handlerRegistration); err != nil {
-		klog.Error(err)
 		return err
 	}
 	klog.Info("secret handler removed", " item key", key)
 
-	// stop the watch/informer if there is no handler
+	// stop informer if there is no handler
 	if m.numHandlers.Load() <= 0 {
 		if !m.StopInformer() {
-			klog.Error("failed to stop secret informer")
+			klog.Warning("secret informer already stopped", " item key", key)
 		}
 		delete(s.monitors, key)
-		klog.Info("secret informer stopped ", " item key ", key)
+		klog.Info("secret informer stopped", " item key ", key)
 	}
 
 	return nil
@@ -146,6 +147,9 @@ func (s *secretMonitor) GetSecret(handlerRegistration SecretEventHandlerRegistra
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 
+	if handlerRegistration == nil {
+		return nil, fmt.Errorf("secret handler is nil")
+	}
 	key := handlerRegistration.GetKey()
 
 	// check if secret watch exists

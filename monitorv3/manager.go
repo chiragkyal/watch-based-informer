@@ -93,7 +93,7 @@ func (m *Manager) UnregisterRoute(parent *routev1.Route, getReferencedObjects fu
 	}
 
 	klog.Info("trying to remove handler with key", key)
-	err := m.monitor.RemoveEventHandler(handlerRegistration)
+	err := m.monitor.RemoveSecretEventHandler(handlerRegistration)
 	if err != nil {
 		// return apierrors.NewNotFound(schema.GroupResource{Resource: "routes"}, key)
 		return apierrors.NewInternalError(err)

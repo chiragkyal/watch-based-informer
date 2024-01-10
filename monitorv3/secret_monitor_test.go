@@ -59,3 +59,58 @@ func TestAddSecretEventHandler(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoveSecretEventHandler(t *testing.T) {
+	scenarios := []struct {
+		name           string
+		isNilHandler   bool
+		alreadyRemoved bool
+		expectErr      bool
+	}{
+		{
+			name:           "secret monitor already removed",
+			alreadyRemoved: true,
+			expectErr:      false,
+		},
+		{
+			name:         "nil secret handler is provided",
+			isNilHandler: true,
+			expectErr:    true,
+		},
+		{
+			name:      "secret handler correctly removed",
+			expectErr: false,
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			fakeKubeClient := fake.NewSimpleClientset()
+			key := NewObjectKey("ns", "r_s")
+			sm := secretMonitor{
+				kubeClient: fakeKubeClient,
+				monitors:   map[ObjectKey]*singleItemMonitor{},
+			}
+			h, _ := sm.AddSecretEventHandler(key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{})
+			if s.isNilHandler {
+				h = nil
+			}
+			if s.alreadyRemoved {
+				delete(sm.monitors, key)
+			}
+
+			gotErr := sm.RemoveSecretEventHandler(h)
+			if gotErr != nil && !s.expectErr {
+				t.Errorf("unexpected error %v", gotErr)
+			}
+			if gotErr == nil && s.expectErr {
+				t.Errorf("expecting an error, got nil")
+			}
+			if !s.expectErr {
+				if _, exist := sm.monitors[key]; exist {
+					t.Error("monitor key still exists", key)
+				}
+			}
+		})
+	}
+}
