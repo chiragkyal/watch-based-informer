@@ -22,7 +22,7 @@ type SecretEventHandlerRegistration interface {
 
 type SecretMonitor interface {
 	//
-	AddEventHandler(namespace, routeSecretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
+	AddSecretEventHandler(namespace, routeSecretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error)
 	//
 	RemoveEventHandler(SecretEventHandlerRegistration) error
 	//
@@ -43,7 +43,7 @@ func (r *secretEventHandlerRegistration) GetHandler() cache.ResourceEventHandler
 	return r.ResourceEventHandlerRegistration
 }
 
-type sm struct {
+type secretMonitor struct {
 	kubeClient kubernetes.Interface
 
 	lock sync.RWMutex
@@ -52,8 +52,8 @@ type sm struct {
 	monitors map[ObjectKey]*singleItemMonitor
 }
 
-func NewSecretMonitor(kubeClient *kubernetes.Clientset) SecretMonitor {
-	return &sm{
+func NewSecretMonitor(kubeClient kubernetes.Interface) SecretMonitor {
+	return &secretMonitor{
 		kubeClient: kubeClient,
 		monitors:   map[ObjectKey]*singleItemMonitor{},
 	}
@@ -61,7 +61,7 @@ func NewSecretMonitor(kubeClient *kubernetes.Clientset) SecretMonitor {
 
 // create/update secret watch.
 // routeSecretName is a combination of "routename_secretname"
-func (s *sm) AddEventHandler(namespace, routeSecretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
+func (s *secretMonitor) AddSecretEventHandler(namespace, routeSecretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -109,7 +109,7 @@ func (s *sm) AddEventHandler(namespace, routeSecretName string, handler cache.Re
 }
 
 // Remove secret watch
-func (s *sm) RemoveEventHandler(handlerRegistration SecretEventHandlerRegistration) error {
+func (s *secretMonitor) RemoveEventHandler(handlerRegistration SecretEventHandlerRegistration) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -142,7 +142,7 @@ func (s *sm) RemoveEventHandler(handlerRegistration SecretEventHandlerRegistrati
 }
 
 // Get the secret object from informer's cache
-func (s *sm) GetSecret(handlerRegistration SecretEventHandlerRegistration) (*v1.Secret, error) {
+func (s *secretMonitor) GetSecret(handlerRegistration SecretEventHandlerRegistration) (*v1.Secret, error) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 

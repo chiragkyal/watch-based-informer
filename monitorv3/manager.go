@@ -62,7 +62,7 @@ func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func
 	secretName := "dummy-secret"
 	key := generateKey(parent.Namespace, parent.Name, secretName)
 
-	handlerRegistration, err := m.monitor.AddEventHandler(key.Namespace, key.Name, m.secretHandler)
+	handlerRegistration, err := m.monitor.AddSecretEventHandler(key.Namespace, key.Name, m.secretHandler)
 	if err != nil {
 		return apierrors.NewInternalError(err)
 	}
