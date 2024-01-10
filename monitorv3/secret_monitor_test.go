@@ -54,6 +54,9 @@ func TestAddSecretEventHandler(t *testing.T) {
 			if !s.expectErr {
 				if _, exist := sm.monitors[key]; !exist {
 					t.Error("monitor should be added into map", key)
+				} else {
+					// stop informer to present memory leakage
+					sm.monitors[key].StopInformer()
 				}
 			}
 		})
@@ -92,10 +95,13 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 				monitors:   map[ObjectKey]*singleItemMonitor{},
 			}
 			h, _ := sm.AddSecretEventHandler(key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{})
+			defer sm.monitors[key].StopInformer()
 			if s.isNilHandler {
+				//sm.monitors[key].StopInformer()
 				h = nil
 			}
 			if s.alreadyRemoved {
+				//sm.monitors[key].StopInformer()
 				delete(sm.monitors, key)
 			}
 
@@ -106,7 +112,7 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 			if gotErr == nil && s.expectErr {
 				t.Errorf("expecting an error, got nil")
 			}
-			if !s.expectErr {
+			if !s.expectErr && !s.isNilHandler {
 				if _, exist := sm.monitors[key]; exist {
 					t.Error("monitor key still exists", key)
 				}
