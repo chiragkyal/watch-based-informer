@@ -192,3 +192,28 @@ func TestMonitorr(t *testing.T) {
 // 	}
 // 	return name
 // }
+
+//TestRemoveSecretEventHandler
+// if !s.expectErr /*&& !s.isNilHandler && !s.alreadyRemoved */ {
+// 	if _, exist := sm.monitors[key]; exist {
+// 		sm.monitors[key].StopInformer()
+// 		t.Error("monitor key still exists", key)
+// 	}
+// }
+
+// if s.alreadyRemoved {
+// 	//sm.monitors[key].StopInformer()
+// 	delete(sm.monitors, key)
+// }
+
+// {
+// 	name:           "secret monitor already removed",
+// 	alreadyRemoved: true,
+// 	expectErr:      false,
+// },
+
+// if _, exist := sm.monitors[key]; exist {
+// 	if !sm.monitors[key].stopped {
+// 		sm.monitors[key].StopInformer()
+// 	}
+// }

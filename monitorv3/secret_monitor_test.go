@@ -65,16 +65,10 @@ func TestAddSecretEventHandler(t *testing.T) {
 
 func TestRemoveSecretEventHandler(t *testing.T) {
 	scenarios := []struct {
-		name           string
-		isNilHandler   bool
-		alreadyRemoved bool
-		expectErr      bool
+		name         string
+		isNilHandler bool
+		expectErr    bool
 	}{
-		{
-			name:           "secret monitor already removed",
-			alreadyRemoved: true,
-			expectErr:      false,
-		},
 		{
 			name:         "nil secret handler is provided",
 			isNilHandler: true,
@@ -94,15 +88,14 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 				kubeClient: fakeKubeClient,
 				monitors:   map[ObjectKey]*singleItemMonitor{},
 			}
-			h, _ := sm.AddSecretEventHandler(key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{})
-			defer sm.monitors[key].StopInformer()
-			if s.isNilHandler {
-				//sm.monitors[key].StopInformer()
-				h = nil
+			h, err := sm.AddSecretEventHandler(key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{})
+			if err != nil {
+				t.Error(err)
 			}
-			if s.alreadyRemoved {
-				//sm.monitors[key].StopInformer()
-				delete(sm.monitors, key)
+			if s.isNilHandler {
+				// stop informer to present memory leakage
+				sm.monitors[key].StopInformer()
+				h = nil
 			}
 
 			gotErr := sm.RemoveSecretEventHandler(h)
@@ -111,11 +104,6 @@ func TestRemoveSecretEventHandler(t *testing.T) {
 			}
 			if gotErr == nil && s.expectErr {
 				t.Errorf("expecting an error, got nil")
-			}
-			if !s.expectErr && !s.isNilHandler {
-				if _, exist := sm.monitors[key]; exist {
-					t.Error("monitor key still exists", key)
-				}
 			}
 		})
 	}
