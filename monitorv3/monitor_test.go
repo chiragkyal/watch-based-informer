@@ -36,6 +36,11 @@ func fakeSecretInformer(ctx context.Context, fakeKubeClient *fake.Clientset, nam
 
 func fakeSecret(namespace, name string) *corev1.Secret {
 	return &corev1.Secret{
+		Type: corev1.SecretTypeOpaque,
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Secret",
+			APIVersion: "v1",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,

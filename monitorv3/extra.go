@@ -2,7 +2,12 @@ package monitorv3
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -217,3 +222,196 @@ func TestMonitorr(t *testing.T) {
 // 		sm.monitors[key].StopInformer()
 // 	}
 // }
+
+// ---------------------------------------------------------------
+type blockVerifierFunc func(block *pem.Block) (*pem.Block, error)
+
+func publicKeyBlockVerifier(block *pem.Block) (*pem.Block, error) {
+	key, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	block = &pem.Block{
+		Type: "PUBLIC KEY",
+	}
+	if block.Bytes, err = x509.MarshalPKIXPublicKey(key); err != nil {
+		return nil, err
+	}
+	return block, nil
+}
+
+func certificateBlockVerifier(block *pem.Block) (*pem.Block, error) {
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	block = &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Raw,
+	}
+	return block, nil
+}
+
+func privateKeyBlockVerifier(block *pem.Block) (*pem.Block, error) {
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		key, err = x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			key, err = x509.ParseECPrivateKey(block.Bytes)
+			if err != nil {
+				return nil, fmt.Errorf("block %s is not valid", block.Type)
+			}
+		}
+	}
+	switch t := key.(type) {
+	case *rsa.PrivateKey:
+		block = &pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(t),
+		}
+	case *ecdsa.PrivateKey:
+		block = &pem.Block{
+			Type: "ECDSA PRIVATE KEY",
+		}
+		if block.Bytes, err = x509.MarshalECPrivateKey(t); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("block private key %T is not valid", key)
+	}
+	return block, nil
+}
+
+func ignoreBlockVerifier(block *pem.Block) (*pem.Block, error) {
+	return nil, nil
+}
+
+var knownBlockDecoders = map[string]blockVerifierFunc{
+	"RSA PRIVATE KEY":   privateKeyBlockVerifier,
+	"ECDSA PRIVATE KEY": privateKeyBlockVerifier,
+	"PRIVATE KEY":       privateKeyBlockVerifier,
+	"PUBLIC KEY":        publicKeyBlockVerifier,
+	// Potential "in the wild" PEM encoded blocks that can be normalized
+	"RSA PUBLIC KEY":   publicKeyBlockVerifier,
+	"DSA PUBLIC KEY":   publicKeyBlockVerifier,
+	"ECDSA PUBLIC KEY": publicKeyBlockVerifier,
+	"CERTIFICATE":      certificateBlockVerifier,
+	// Blocks that should be dropped
+	"EC PARAMETERS": ignoreBlockVerifier,
+}
+
+// ---------------------------------------------------------------
+
+func TestGetSecrettt(t *testing.T) {
+	var (
+		secretName = "secretName"
+	)
+	scenarios := []struct {
+		name         string
+		isNilHandler bool
+		expectErr    bool
+		expectSecret *v1.Secret
+	}{
+		// {
+		// 	name:         "nil secret handler is provided",
+		// 	isNilHandler: true,
+		// 	expectErr:    true,
+		// 	expectSecret: nil,
+		// },
+		// {
+		// 	name:         "secret does not exist",
+		// 	expectErr:    true,
+		// 	expectSecret: nil,
+		// },
+		{
+			name:         "correct",
+			expectErr:    false,
+			expectSecret: fakeSecret_("ns", secretName),
+		},
+	}
+
+	for _, s := range scenarios {
+		t.Run(s.name, func(t *testing.T) {
+			var fakeKubeClient *fake.Clientset
+			key := NewObjectKey("ns", "routeName"+"_"+secretName)
+			if s.expectSecret != nil {
+				fakeKubeClient = fake.NewSimpleClientset(s.expectSecret)
+			}
+			sm := secretMonitor{
+				kubeClient: fakeKubeClient,
+				monitors:   map[ObjectKey]*singleItemMonitor{},
+			}
+			h, err := sm.AddSecretEventHandler(key.Namespace, key.Name, cache.ResourceEventHandlerFuncs{})
+			if err != nil {
+				t.Error(err)
+			}
+			if !cache.WaitForCacheSync(context.TODO().Done(), h.HasSynced) {
+				t.Fatal("cache not synced yet")
+			}
+			if s.isNilHandler {
+				// stop informer to present memory leakage
+				sm.monitors[key].StopInformer()
+				h = nil
+			}
+			gotSec, gotErr := sm.GetSecret(h)
+			if gotErr != nil && !s.expectErr {
+				t.Errorf("unexpected error %v", gotErr)
+			}
+			if gotErr == nil && s.expectErr {
+				t.Errorf("expecting an error, got nil")
+			}
+			if !reflect.DeepEqual(s.expectSecret, gotSec) {
+				t.Errorf("expected %v got %v", s.expectSecret, gotSec)
+			}
+		})
+	}
+}
+
+// Tomorrow test with origin client
+func TestGetSecrets(t *testing.T) {
+	ns := "sandbox"
+	secretName := "secretName"
+	secret := fakeSecret_(ns, secretName)
+	fakeKubeClient := fake.NewSimpleClientset(secret)
+	sm := NewSecretMonitor(fakeKubeClient)
+
+	queue := make(chan string)
+	//key := NewObjectKey(ns, "routeName"+"_"+secretName)
+	// sm := secretMonitor{
+	// 	kubeClient: fakeKubeClient,
+	// 	monitors:   map[ObjectKey]*singleItemMonitor{},
+	// }
+	h, err := sm.AddSecretEventHandler(ns, "routeName"+"_"+secretName, cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			queue <- "got it"
+		},
+	})
+	if err != nil || h == nil {
+		t.Error(err)
+	}
+	time.Sleep(time.Second)
+
+	// ch := make(chan struct{})
+	// //t.Error(h)
+	// if !cache.WaitForCacheSync(ctx.Done(), h.HasSynced) {
+	// 	t.Fatal("cache not synced yet")
+	// }
+	// if err := wait.PollImmediate(10*time.Millisecond, time.Second, func() (done bool, err error) { return h.HasSynced(), nil }); err != nil {
+	// 	t.Fatal("cache not synced yet")
+	// }
+	// wait.PollWithContext()
+	// select {
+	// case s := <-queue:
+	// 	t.Log(s)
+	// case <-time.After(10 * time.Second):
+	// 	t.Fatal("test timeout")
+	// }
+	// gotSec, gotErr := sm.GetSecret(h)
+	// if gotErr != nil {
+	// 	t.Errorf("unexpected error %v", gotErr)
+	// }
+	// if !reflect.DeepEqual(fakeSecret(ns, secretName), gotSec) {
+	// 	t.Errorf("expected %v got %v", fakeSecret(ns, secretName), gotSec)
+	// }
+	//sm.monitors[key].StopInformer()
+}
