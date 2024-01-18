@@ -62,6 +62,12 @@ func NewSecretMonitor(kubeClient kubernetes.Interface) SecretMonitor {
 // create/update secret watch.
 // routeSecretName is a combination of "routename_secretname"
 func (s *secretMonitor) AddSecretEventHandler(namespace, routeSecretName string, handler cache.ResourceEventHandler) (SecretEventHandlerRegistration, error) {
+	return s.addSecretEventHandler(namespace, routeSecretName, handler, nil)
+}
+
+// addSecretEventHandler should only be used directly for tests. For production use AddSecretEventHandler().
+// createInformerFn helps in mocking sharedInformer for unit tests.
+func (s *secretMonitor) addSecretEventHandler(namespace, routeSecretName string, handler cache.ResourceEventHandler, createInformerFn func() cache.SharedInformer) (SecretEventHandlerRegistration, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -82,17 +88,24 @@ func (s *secretMonitor) AddSecretEventHandler(namespace, routeSecretName string,
 			return nil, err
 		}
 
-		// create a single secret monitor
-		sharedInformer := cache.NewSharedInformer(
-			cache.NewListWatchFromClient(
-				s.kubeClient.CoreV1().RESTClient(),
-				"secrets",
-				namespace,
-				fields.OneTermEqualSelector("metadata.name", secretName),
-			),
-			&corev1.Secret{},
-			0,
-		)
+		var sharedInformer cache.SharedInformer
+		if createInformerFn == nil {
+			// create a single secret monitor
+			sharedInformer = cache.NewSharedInformer(
+				cache.NewListWatchFromClient(
+					s.kubeClient.CoreV1().RESTClient(),
+					"secrets",
+					namespace,
+					fields.OneTermEqualSelector("metadata.name", secretName),
+				),
+				&corev1.Secret{},
+				0,
+			)
+		} else {
+			// only for testability
+			klog.Warning("creating informer for testability")
+			sharedInformer = createInformerFn()
+		}
 
 		m = newSingleItemMonitor(key, sharedInformer)
 		go m.StartInformer()

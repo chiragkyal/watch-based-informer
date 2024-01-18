@@ -8,7 +8,6 @@ import (
 	routev1 "github.com/openshift/api/route/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -50,16 +49,11 @@ func (m *Manager) WithSecretHandler(handler cache.ResourceEventHandlerFuncs) *Ma
 	return m
 }
 
-func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func(*routev1.Route) sets.String) error {
+func (m *Manager) RegisterRoute(parent *routev1.Route) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	// TODO refactor later, get referenced secretName from route
-	// names := getReferencedObjects(parent)
-	// secretName <-- names[0]
-
-	// TODO hard coded to test since externalCertificate is TP
-	secretName := "dummy-secret"
+	secretName := parent.Spec.TLS.ExternalCertificate.Name
 	key := generateKey(parent.Namespace, parent.Name, secretName)
 
 	handlerRegistration, err := m.monitor.AddSecretEventHandler(key.Namespace, key.Name, m.secretHandler)
@@ -72,16 +66,11 @@ func (m *Manager) RegisterRoute(parent *routev1.Route, getReferencedObjects func
 	return nil
 }
 
-func (m *Manager) UnregisterRoute(parent *routev1.Route, getReferencedObjects func(*routev1.Route) sets.String) error {
+func (m *Manager) UnregisterRoute(parent *routev1.Route) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	// TODO refactor later, get referenced secretName from route
-	// names := getReferencedObjects(parent)
-	// secretName <-- names[0]
-
-	// TODO hard coded to test since externalCertificate is TP
-	secretName := "dummy-secret"
+	secretName := parent.Spec.TLS.ExternalCertificate.Name
 	key := generateKey(parent.Namespace, parent.Name, secretName)
 	klog.Info("trying to UnregisterRoute with key", key)
 
@@ -112,12 +101,7 @@ func (m *Manager) GetSecret(parent *routev1.Route) (*v1.Secret, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
-	// TODO refactor later, get referenced secretName from route
-	// names := getReferencedObjects(parent)
-	// secretName <-- names[0]
-
-	// TODO hard coded to test since externalCertificate is TP
-	secretName := "dummy-secret"
+	secretName := parent.Spec.TLS.ExternalCertificate.Name
 
 	key := generateKey(parent.Namespace, parent.Name, secretName)
 	handlerRegistration, exists := m.registeredHandlers[key]

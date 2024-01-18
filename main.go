@@ -17,7 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"reflect"
@@ -26,13 +25,9 @@ import (
 	"k8s.io/klog/v2"
 
 	v1 "k8s.io/api/core/v1"
-	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
@@ -42,9 +37,6 @@ import (
 	routev1 "github.com/openshift/api/route/v1"
 	routev1client "github.com/openshift/client-go/route/clientset/versioned"
 )
-
-type listObjectFunc func(string, meta_v1.ListOptions) (runtime.Object, error)
-type watchObjectFunc func(string, meta_v1.ListOptions) (watch.Interface, error)
 
 var namespace = "sandbox"
 
@@ -177,34 +169,12 @@ func main() {
 		klog.Fatal(err)
 	}
 
-	// JUST for testing
-	pods, err := clientset.CoreV1().Pods("openshift-kube-apiserver").List(context.Background(), meta_v1.ListOptions{})
-	if err != nil {
-		klog.Fatal(err)
-	}
-	klog.Info("Pods in openshift-kube-apiserver namespace")
-	for _, pod := range pods.Items {
-		klog.Info(pod.Name)
-	}
-	// JUST for testing ends
-
 	// create the route watcher
 	routeListWatcher := cache.NewListWatchFromClient(routev1client.NewForConfigOrDie(config).RouteV1().RESTClient(), "routes", namespace, fields.Everything())
 
 	// create the workqueue
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 
-	getSecretNames := func(route *routev1.Route) sets.String {
-		result := sets.NewString()
-		secretName := route.Spec.TLS.ExternalCertificate.Name
-		result.Insert(secretName)
-
-		klog.Info("referenced secret name :", secretName)
-		return result
-	}
-	// secretManager := LoadSecretManager(clientset, queue)
-	// secretManager := monitor.NewSecretMonitor(clientset, queue)
-	// secretManager := monitorv2.NewSecretMonitor(clientset, queue)
 	secretManager := monitorv3.NewManager(clientset, queue)
 
 	// secret watcher handler
@@ -217,6 +187,7 @@ func main() {
 
 			// secret added, process the associated route
 			queue.Add("sandbox/route") //hardcoded pass key instead
+			// ^^ How to know which route to add?
 
 		},
 		UpdateFunc: func(old interface{}, new interface{}) {
@@ -227,7 +198,7 @@ func main() {
 			klog.Info("Secret updated ", "old ", secretOld.ResourceVersion, " new ", secretNew.ResourceVersion, " key ", key)
 
 			// secret updated, process the associated route
-			queue.Add("sandbox/route") //hardcoded
+			queue.Add("sandbox/route") //hardcoded <-
 		},
 		DeleteFunc: func(obj interface{}) {
 
@@ -256,9 +227,8 @@ func main() {
 			// 	queue.Add(key)
 			// }
 			//
-			// secretManager.RegisterRoute(pod)
 			// when route is added, create a secret watcher
-			err := secretManager.RegisterRoute(route, getSecretNames)
+			err := secretManager.RegisterRoute(route)
 			if err != nil {
 				klog.Error("failed to register route")
 			}
@@ -273,19 +243,16 @@ func main() {
 				klog.Info("Roue Update event ", "old ", oldRoute.ResourceVersion, " new ", newRoute.ResourceVersion, " key ", key)
 				// queue.Add(key)
 
-				// secretManager.UnregisterRoute(oldPod)
-				// secretManager.RegisterRoute(newPod)
-
-				if err := secretManager.UnregisterRoute(oldRoute, getSecretNames); err != nil {
+				if err := secretManager.UnregisterRoute(oldRoute); err != nil {
 					klog.Error(err)
 				} // remove old watch
 
-				if err := secretManager.RegisterRoute(newRoute, getSecretNames); err != nil {
+				if err := secretManager.RegisterRoute(newRoute); err != nil {
 					klog.Error(err)
 				} // create new watch
 			}
 
-			klog.Info("Roue Update event, No change ", "trying to GetSecret ", "new", newRoute.Name, " referenced secret", newRoute.Spec.TLS.ExternalCertificate.Name)
+			klog.Info("Roue Update event, No change ", "trying to GetSecret ", "new ", newRoute.Name, " referenced secret", newRoute.Spec.TLS.ExternalCertificate.Name)
 
 			s, err := secretManager.GetSecret(newRoute)
 			if err == nil {
@@ -307,7 +274,7 @@ func main() {
 			// secretManager.UnregisterRoute(obj.(*v1.Pod))
 
 			// when route is deleted, remove associated secret watcher
-			err := secretManager.UnregisterRoute(route, getSecretNames)
+			err := secretManager.UnregisterRoute(route)
 			if err != nil {
 				klog.Error(err)
 			}
@@ -318,7 +285,7 @@ func main() {
 	// Route Controller
 	indexer, informer := cache.NewIndexerInformer(routeListWatcher, &routev1.Route{}, 0, routeh, cache.Indexers{})
 
-	controller := NewController(queue, indexer, informer, clientset /*routeh*/)
+	controller := NewController(queue, indexer, informer, clientset)
 
 	// Now let's start the controller
 	stop := make(chan struct{})
