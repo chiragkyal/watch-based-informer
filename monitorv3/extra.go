@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	routev1 "github.com/openshift/api/route/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -414,4 +416,40 @@ func TestGetSecrets(t *testing.T) {
 	// 	t.Errorf("expected %v got %v", fakeSecret(ns, secretName), gotSec)
 	// }
 	//sm.monitors[key].StopInformer()
+}
+
+type testSecretGetterr struct {
+	getter    corev1client.SecretsGetter
+	secrets   []*corev1.Secret
+	namespace string
+}
+
+func (t *testSecretGetterr) Secrets(_ string) corev1client.SecretInterface {
+	existingObjects := []runtime.Object{}
+	for _, s := range t.secrets {
+		existingObjects = append(existingObjects, s)
+	}
+	return fake.NewSimpleClientset(existingObjects...).CoreV1().Secrets(t.namespace)
+}
+
+func (t *testSecretGetterr) WithSecret(secret *corev1.Secret) *testSecretGetterr {
+	t.secrets = append(t.secrets, secret)
+	return t
+}
+
+func (t *testSecretGetterr) WithNamespace(namespace string) *testSecretGetterr {
+	t.namespace = namespace
+	return t
+}
+
+func (t *testSecretGetterr) WithSecretData(route *routev1.Route, data map[string]string) *testSecretGetterr {
+	t.secrets = append(t.secrets, &corev1.Secret{
+		StringData: data,
+		Type:       corev1.SecretTypeTLS,
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      route.Spec.TLS.ExternalCertificate.Name,
+			Namespace: route.Namespace,
+		},
+	})
+	return t
 }
