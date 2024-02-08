@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"reflect"
 	"time"
 
 	"k8s.io/klog/v2"
@@ -175,7 +174,7 @@ func generateHandler(secretManager *secret.Manager, route *v1.Pod /*routev1.Rout
 func getReferenceSecret(route *v1.Pod /*routev1.Route*/) string {
 	// route.Spec.TLS.ExternalCertificate.Name
 	secretName := route.Spec.Containers[0].Env[0].ValueFrom.SecretKeyRef.Name
-	klog.Info("Referenced secretName: ", secretName)
+	klog.V(2).Info("Referenced secretName: ", secretName)
 	return secretName
 }
 
@@ -240,8 +239,9 @@ func main() {
 			// newRoute := new.(*routev1.Route)
 			oldRoute := old.(*v1.Pod)
 			newRoute := new.(*v1.Pod)
-			klog.Info("Route Update event")
-			if err == nil && !reflect.DeepEqual(oldRoute.Spec, newRoute.Spec) {
+			// klog.Info("Route Update event")
+			// if err == nil && !reflect.DeepEqual(oldRoute.Spec, newRoute.Spec) {
+			if err == nil && getReferenceSecret(oldRoute) != getReferenceSecret(newRoute) {
 
 				klog.Info("Roue Update event ", "old ", oldRoute.ResourceVersion, " new ", newRoute.ResourceVersion, " key ", key)
 				queue.Add("From routeh " + key)
