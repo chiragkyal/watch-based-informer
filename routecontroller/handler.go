@@ -19,11 +19,11 @@ type Handler interface {
 type RouteEvent struct {
 	eventType watch.EventType
 	// resourceKey   string
-	route         *v1.Pod
+	route         *v1.ConfigMap
 	secretManager *secret.Manager
 }
 
-func NewRouteEvent(eventType watch.EventType, route *v1.Pod, secretManager *secret.Manager) Handler {
+func NewRouteEvent(eventType watch.EventType, route *v1.ConfigMap, secretManager *secret.Manager) Handler {
 	return &RouteEvent{
 		eventType:     eventType,
 		route:         route,
@@ -39,7 +39,7 @@ func NewRouteEvent(eventType watch.EventType, route *v1.Pod, secretManager *secr
 // 	return re.eventType
 // }
 
-func (re *RouteEvent) HandleRoute( /*eventType watch.EventType, route *v1.Pod*/ ) error {
+func (re *RouteEvent) HandleRoute() error {
 
 	route := re.route
 	eventType := re.eventType
@@ -53,9 +53,10 @@ func (re *RouteEvent) HandleRoute( /*eventType watch.EventType, route *v1.Pod*/ 
 		}
 
 	case watch.Modified:
+		// Update the route content to serve the certificate
 		s, err := re.secretManager.GetSecret(route.Namespace, route.Name)
-		// TODO: what will happen if secret got deleted, should the route still serve the certificate?
-		// Now err will return
+		// TODO: what will happen if secret got deleted? should the route still serve the old certificate?
+		// Now err will return, secret not found
 		if err != nil {
 			klog.Error(err)
 			return err
@@ -74,14 +75,14 @@ func (re *RouteEvent) HandleRoute( /*eventType watch.EventType, route *v1.Pod*/ 
 	return nil
 }
 
-func localRegisterRoute(secretManager *secret.Manager, route *v1.Pod /*routev1.Route*/) error {
+func localRegisterRoute(secretManager *secret.Manager, route *v1.ConfigMap /*routev1.Route*/) error {
 	secreth := generateSecretHandler(secretManager, route)
 	secretManager.WithSecretHandler(secreth)
 	return secretManager.RegisterRoute(context.Background(), route.Namespace, route.Name, getReferenceSecret(route))
 
 }
 
-func generateSecretHandler(secretManager *secret.Manager, route *v1.Pod /*routev1.Route*/) cache.ResourceEventHandlerFuncs {
+func generateSecretHandler(secretManager *secret.Manager, route *v1.ConfigMap /*routev1.Route*/) cache.ResourceEventHandlerFuncs {
 	// secret handler
 	secreth := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {

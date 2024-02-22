@@ -8,8 +8,6 @@ import (
 	"k8s.io/klog/v2"
 
 	secret "github.com/chiragkyal/watch-based-informer/monitorv4"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
@@ -21,7 +19,7 @@ import (
 	// routev1client "github.com/openshift/client-go/route/clientset/versioned"
 )
 
-var namespace = "default"
+var namespace = "sandbox"
 
 // Controller demonstrates how to implement a controller with client-go.
 type Controller struct {
@@ -130,7 +128,7 @@ func (c *Controller) Run(workers int, stopCh chan struct{}) {
 
 	// Let the workers stop when we are done
 	defer c.queue.ShutDown()
-	klog.Info("Starting Route controller")
+	klog.Infof("Starting %T controller", bankResource())
 
 	go c.informer.Run(stopCh)
 
@@ -145,19 +143,12 @@ func (c *Controller) Run(workers int, stopCh chan struct{}) {
 	}
 
 	<-stopCh
-	klog.Info("Stopping Pod controller")
+	klog.Infof("Stopping %T controller", bankResource())
 }
 
 func (c *Controller) runWorker() {
 	for c.processNextItem() {
 	}
-}
-
-func getReferenceSecret(route *v1.Pod /*routev1.Route*/) string {
-	// route.Spec.TLS.ExternalCertificate.Name
-	secretName := route.Spec.Containers[0].Env[0].ValueFrom.SecretKeyRef.Name
-	klog.V(2).Info("Referenced secretName: ", secretName)
-	return secretName
 }
 
 func main() {
@@ -180,8 +171,7 @@ func main() {
 		klog.Fatal(err)
 	}
 
-	// routeListWatcher := cache.NewListWatchFromClient(routev1client.NewForConfigOrDie(config).RouteV1().RESTClient(), "routes", namespace, fields.Everything())
-	routeListWatcher := cache.NewListWatchFromClient(clientset.CoreV1().RESTClient(), "pods", namespace, fields.Everything())
+	routeListWatcher := getListWatcher(clientset, namespace)
 
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 
@@ -194,7 +184,7 @@ func main() {
 			// if key, err = cache.MetaNamespaceKeyFunc(obj); err != nil {
 			// 	panic(err)
 			// }
-			route := obj.(*v1.Pod)
+			route := getResource(obj)
 			klog.Info("Add Event ", "route.Name ", route.Name, " key ", route.Name)
 
 			queue.Add(NewRouteEvent(watch.Added, route, secretManager))
@@ -208,8 +198,8 @@ func main() {
 			// if oldKey, err = cache.MetaNamespaceKeyFunc(old); err != nil {
 			// 	panic(err)
 			// }
-			oldRoute := old.(*v1.Pod)
-			newRoute := new.(*v1.Pod)
+			oldRoute := getResource(old)
+			newRoute := getResource(new)
 
 			if getReferenceSecret(oldRoute) != getReferenceSecret(newRoute) {
 				klog.Info("Roue Update event ", "old ", oldRoute.ResourceVersion, " new ", newRoute.ResourceVersion, " newkey ", newRoute.Name, " oldKey ", oldRoute.Name)
@@ -224,7 +214,7 @@ func main() {
 			// if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
 			// 	panic(err)
 			// }
-			route := obj.(*v1.Pod)
+			route := getResource(obj)
 			klog.Info("Delete event ", " obj ", route.ResourceVersion, " key ", route.Name)
 
 			// when route is deleted, remove associated secret watcher
@@ -234,7 +224,7 @@ func main() {
 	}
 
 	// Route Controller
-	indexer, informer := cache.NewIndexerInformer(routeListWatcher, &v1.Pod{} /*&routev1.Route{}*/, 0, routeh, cache.Indexers{})
+	indexer, informer := cache.NewIndexerInformer(routeListWatcher, bankResource(), 0, routeh, cache.Indexers{})
 
 	controller := NewController(queue, indexer, informer, clientset)
 
