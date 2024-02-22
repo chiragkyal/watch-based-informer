@@ -54,6 +54,7 @@ func (re *RouteEvent) HandleRoute() error {
 
 	case watch.Modified:
 		// Update the route content to serve the certificate
+		// TODO: As you are getting the route Object from cache, it's content would be outdated, so need to resync before updating the certificate.
 		s, err := re.secretManager.GetSecret(route.Namespace, route.Name)
 		// TODO: what will happen if secret got deleted? should the route still serve the old certificate?
 		// Now err will return, secret not found
