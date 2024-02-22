@@ -128,7 +128,7 @@ func (c *Controller) Run(workers int, stopCh chan struct{}) {
 
 	// Let the workers stop when we are done
 	defer c.queue.ShutDown()
-	klog.Infof("Starting %T controller", bankResource())
+	klog.Infof("Starting %T controller", emptyResource())
 
 	go c.informer.Run(stopCh)
 
@@ -143,7 +143,7 @@ func (c *Controller) Run(workers int, stopCh chan struct{}) {
 	}
 
 	<-stopCh
-	klog.Infof("Stopping %T controller", bankResource())
+	klog.Infof("Stopping %T controller", emptyResource())
 }
 
 func (c *Controller) runWorker() {
@@ -224,7 +224,7 @@ func main() {
 	}
 
 	// Route Controller
-	indexer, informer := cache.NewIndexerInformer(routeListWatcher, bankResource(), 0, routeh, cache.Indexers{})
+	indexer, informer := cache.NewIndexerInformer(routeListWatcher, emptyResource(), 0, routeh, cache.Indexers{})
 
 	controller := NewController(queue, indexer, informer, clientset)
 

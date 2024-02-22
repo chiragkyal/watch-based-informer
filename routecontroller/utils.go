@@ -8,7 +8,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
-func bankResource() *v1.ConfigMap {
+func emptyResource() *v1.ConfigMap {
 	return &v1.ConfigMap{}
 }
 func getResource(obj interface{}) *v1.ConfigMap {
