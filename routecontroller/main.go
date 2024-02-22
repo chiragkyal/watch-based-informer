@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
@@ -42,43 +42,57 @@ func NewController(queue workqueue.RateLimitingInterface, indexer cache.Indexer,
 
 func (c *Controller) processNextItem() bool {
 	// Wait until there is a new item in the working queue
-	key, quit := c.queue.Get()
+	item, quit := c.queue.Get()
 	if quit {
 		return false
 	}
-	defer c.queue.Done(key)
+	defer c.queue.Done(item)
 
-	if key, ok := key.(string); ok {
-		klog.Info("done processing route with name ", " key ", key)
-		return true
+	if _, ok := item.(Handler); ok {
+		klog.Info("successfully got item %v", item)
+		// return true
+	} else {
+		klog.Info("did not got item %v", item)
 	}
 
 	// Invoke the method containing the business logic
-	err := c.syncToStdout(key.(string))
+	err := c.syncToStdout(item.(Handler))
+	klog.Error(err)
+
 	// Handle the error if something went wrong during the execution of the business logic
-	c.handleErr(err, key)
+	// 	TODO: invoke handle err
+	// c.handleErr(err, key)
 	return true
 }
 
 // syncToStdout is the business logic of the controller. In this controller it simply prints
 // information about the pod to stdout. In case an error happened, it has to simply return the error.
 // The retry logic should not be part of the business logic.
-func (c *Controller) syncToStdout(key string) error {
-	obj, exists, err := c.indexer.Get(key)
+func (c *Controller) syncToStdout(handler Handler) error {
+	obj, exists, err := c.indexer.GetByKey(handler.GetResourceKey())
 	if err != nil {
-		klog.Errorf("Fetching object with key %s from store failed with %v", key, err)
+		klog.Errorf("Fetching object with key %s from store failed with %v", handler.GetResourceKey(), err)
 		return err
 	}
 
 	if !exists {
 		// Below we will warm up our cache with a Pod, so that we will see a delete for one pod
-		fmt.Printf("Route %s does not exist anymore\n", key)
+		klog.Info("Route %s does not exist anymore\n", handler.GetResourceKey())
 	} else {
 		// Note that you also have to check the uid if you have a local controlled resource, which
 		// is dependent on the actual instance, to detect that a Pod was recreated with the same name
+		if _, ok := obj.(*v1.Pod); !ok {
+			klog.Error("unable to type cast to pod")
+			return err
+		}
+		pod := obj.(*v1.Pod)
 
-		// fmt.Printf("Sync/Add/Update for Route %s\n", obj.(*routev1.Route).GetName())
-		fmt.Printf("Sync/Add/Update for Route %s\n", obj.(*v1.Pod).GetName())
+		klog.Info("Sync/Add/Update for Route %s\n", pod.GetName())
+
+		// invoke actual logic
+		if err := handler.HandleRoute( /*handler.GetEventType()*/ pod); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -121,7 +135,7 @@ func (c *Controller) Run(workers int, stopCh chan struct{}) {
 
 	// Wait for all involved caches to be synced, before processing items from the queue is started
 	if !cache.WaitForCacheSync(stopCh, c.informer.HasSynced) {
-		utilruntime.HandleError(fmt.Errorf("Timed out waiting for caches to sync"))
+		utilruntime.HandleError(fmt.Errorf("timed out waiting for caches to sync"))
 		return
 	}
 
@@ -136,39 +150,6 @@ func (c *Controller) Run(workers int, stopCh chan struct{}) {
 func (c *Controller) runWorker() {
 	for c.processNextItem() {
 	}
-}
-
-func localRegisterRoute(secretManager *secret.Manager, route *v1.Pod /*routev1.Route*/) error {
-	secreth := generateHandler(secretManager, route)
-	secretManager.WithSecretHandler(secreth)
-	return secretManager.RegisterRoute(context.Background(), route.Namespace, route.Name, getReferenceSecret(route))
-
-}
-func generateHandler(secretManager *secret.Manager, route *v1.Pod /*routev1.Route*/) cache.ResourceEventHandlerFuncs {
-	// secret handler
-	secreth := cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			key, _ := cache.MetaNamespaceKeyFunc(obj)
-			secret := obj.(*v1.Secret)
-			klog.Info("Secret added ", "obj ", secret.ResourceVersion, " key ", key, " For ", route.Namespace+"/"+route.Name)
-			secretManager.Queue().Add("From secreth " + route.Namespace + "/" + route.Name)
-		},
-		UpdateFunc: func(old interface{}, new interface{}) {
-			key, _ := cache.MetaNamespaceKeyFunc(new)
-			secretOld := old.(*v1.Secret)
-			secretNew := new.(*v1.Secret)
-			klog.Info("Secret updated ", "old ", secretOld.ResourceVersion, " new ", secretNew.ResourceVersion, " key ", key, " For ", route.Namespace+"/"+route.Name)
-			secretManager.Queue().Add("From secreth " + route.Namespace + "/" + route.Name)
-		},
-		DeleteFunc: func(obj interface{}) {
-			key, _ := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
-			secret := obj.(*v1.Secret)
-			klog.Info("Secret deleted ", " obj ", secret.ResourceVersion, " key ", key, " For ", route.Namespace+"/"+route.Name)
-			secretManager.Queue().Add("From secreth " + route.Namespace + "/" + route.Name)
-		},
-	}
-
-	return secreth
 }
 
 func getReferenceSecret(route *v1.Pod /*routev1.Route*/) string {
@@ -208,68 +189,49 @@ func main() {
 	// Route handler
 	routeh := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			key, err := cache.MetaNamespaceKeyFunc(obj)
-			// route := obj.(*routev1.Route)
+			var key string
+			if key, err = cache.MetaNamespaceKeyFunc(obj); err != nil {
+				panic(err)
+			}
 			route := obj.(*v1.Pod)
 			klog.Info("Add Event ", "route.Name ", route.Name, " key ", key)
 
-			if err == nil {
-				queue.Add("From routeh " + key)
-			}
-
-			//TODO: Registering route should be done by Queue, otherwise the flow with break.
-			// generate Handler and watch
-			err = localRegisterRoute(secretManager, route)
-			if err != nil {
-				klog.Error("failed to register route")
-			}
-
-			// Extra : Print secret Content
-			s, err := secretManager.GetSecret(route.Namespace, route.Name)
-			if err == nil {
-				klog.Info("fetching secret data ", s.Data)
-			} else {
-				klog.Error(err)
-			}
+			queue.Add(NewRouteEvent(watch.Added, key, secretManager))
 		},
 		UpdateFunc: func(old interface{}, new interface{}) {
-			key, err := cache.MetaNamespaceKeyFunc(new)
-
-			// oldRoute := old.(*routev1.Route)
-			// newRoute := new.(*routev1.Route)
+			var oldKey, newKey string
+			var err error
+			if newKey, err = cache.MetaNamespaceKeyFunc(new); err != nil {
+				panic(err)
+			}
+			if oldKey, err = cache.MetaNamespaceKeyFunc(old); err != nil {
+				panic(err)
+			}
 			oldRoute := old.(*v1.Pod)
 			newRoute := new.(*v1.Pod)
-			// klog.Info("Route Update event")
-			// if err == nil && !reflect.DeepEqual(oldRoute.Spec, newRoute.Spec) {
-			if err == nil && getReferenceSecret(oldRoute) != getReferenceSecret(newRoute) {
 
-				klog.Info("Roue Update event ", "old ", oldRoute.ResourceVersion, " new ", newRoute.ResourceVersion, " key ", key)
-				queue.Add("From routeh " + key)
-
-				if err := secretManager.UnregisterRoute(oldRoute.Namespace, oldRoute.Name); err != nil {
-					klog.Error(err)
-				} // remove old watch
-
-				if err := localRegisterRoute(secretManager, newRoute); err != nil {
-					klog.Error(err)
-				} // create new watch
+			if getReferenceSecret(oldRoute) != getReferenceSecret(newRoute) {
+				klog.Info("Roue Update event ", "old ", oldRoute.ResourceVersion, " new ", newRoute.ResourceVersion, " newkey ", newKey, " oldKey ", oldKey)
+				// remove old watch
+				queue.Add(NewRouteEvent(watch.Deleted, oldKey, secretManager))
+				// create new watch
+				queue.Add(NewRouteEvent(watch.Added, newKey, secretManager))
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
-			key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
-
-			// route := obj.(*routev1.Route)
+			var key string
+			if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
+				panic(err)
+			}
 			route := obj.(*v1.Pod)
 			klog.Info("Delete event ", " obj ", route.ResourceVersion, " key ", key)
-			if err == nil {
-				queue.Add("From routeh " + key)
-			}
 
 			// when route is deleted, remove associated secret watcher
-			err = secretManager.UnregisterRoute(route.Namespace, route.Name)
-			if err != nil {
-				klog.Error(err)
-			}
+			// TODO: Here queue will ingore this call and will drop this route because it won't be able to this route from cache after it got deleted
+			// and hence secret manager would not be called.
+			// TODO: should be directly pass the object?
+			queue.Add(NewRouteEvent(watch.Deleted, key, secretManager))
+
 		},
 	}
 
